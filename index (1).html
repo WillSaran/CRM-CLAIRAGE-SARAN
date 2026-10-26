@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Éclairage Saran">
+<meta name="theme-color" content="#0d1117">
+<title>Éclairage Moderne Saran</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💡</text></svg>">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0d1117;--bg2:#161b22;--bg3:#1c2333;--bg4:#21262d;
+  --border:rgba(255,255,255,0.07);--border2:rgba(255,255,255,0.13);
+  --text:#e6edf3;--muted:#7d8590;
+  --accent:#f0a020;--accent2:#e0761a;--accent-rgb:240,160,32;
+  --success:#3fb950;--warning:#d29922;--danger:#f85149;
+  --font-head:'Syne',sans-serif;--font-body:'DM Sans',sans-serif;
+  --topbar-h:54px;
+}
+[data-theme="light"]{
+  --bg:#f4f5f7;--bg2:#ffffff;--bg3:#eceef2;--bg4:#e3e6ec;
+  --border:rgba(0,0,0,0.08);--border2:rgba(0,0,0,0.14);
+  --text:#1a1f26;--muted:#5b6472;
+  --accent:#c77a00;--accent2:#b35d00;--accent-rgb:199,122,0;
+  --success:#1a7f37;--warning:#9a6700;--danger:#cf222e;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--font-body);height:100%}
+#root{min-height:100vh}
+h1,h2,h3,.fh{font-family:var(--font-head);font-weight:800;letter-spacing:-0.01em}
+a{color:inherit}
+button{font-family:var(--font-body);cursor:pointer;touch-action:manipulation}
+input,select,textarea{font-family:var(--font-body);background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:8px;padding:9px 11px;font-size:14px;width:100%}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+.muted{color:var(--muted)}
+.topbar{position:sticky;top:0;z-index:40;height:var(--topbar-h);display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 16px;background:var(--bg2);border-bottom:1px solid var(--border)}
+.logo{font-family:var(--font-head);font-weight:800;font-size:17px;display:flex;align-items:center;gap:8px;white-space:nowrap}
+.logo .dot{width:11px;height:11px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 0 10px rgba(var(--accent-rgb),.6)}
+.btn{border:1px solid var(--border2);background:var(--bg3);color:var(--text);border-radius:9px;padding:9px 14px;font-size:13.5px;font-weight:600;display:inline-flex;align-items:center;gap:6px}
+.btn:active{transform:scale(0.97)}
+.btn-p{background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;color:#fff}
+.btn-danger{border-color:rgba(248,81,73,0.4);color:var(--danger)}
+.btn-sm{padding:6px 10px;font-size:12.5px;border-radius:7px}
+.btn:disabled{opacity:0.5;cursor:not-allowed}
+.shell{display:flex;min-height:calc(100vh - var(--topbar-h))}
+.nav{width:210px;flex-shrink:0;border-right:1px solid var(--border);padding:14px 10px;background:var(--bg2)}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:9px;font-size:14px;font-weight:600;color:var(--muted);cursor:pointer;margin-bottom:2px}
+.nav-item.active{background:rgba(var(--accent-rgb),0.13);color:var(--accent)}
+.nav-item:hover{background:var(--bg3)}
+.main{flex:1;min-width:0;padding:20px}
+@media(max-width:899px){.nav{position:fixed;top:0;bottom:0;left:0;width:min(250px,80vw);transform:translateX(-102%);transition:transform .2s ease;overflow-y:auto;z-index:61;padding:12px 10px 40px;box-shadow:4px 0 18px rgba(0,0,0,.35)}.nav.ouvert{transform:none}.nav-fond{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:60}.nav-item{font-size:15px;padding:12px}}
+@media(max-width:760px){.main{padding:14px 12px}}
+.dash-rangee{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:0 14px;align-items:start}
+.dash-tuiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:10px;margin-bottom:14px}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px}
+.badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:20px;font-size:11.5px;font-weight:700}
+.field{margin-bottom:11px}
+.field label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.02em}
+.login-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:18px;padding:20px}
+.spin{width:26px;height:26px;border:3px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:sp 0.8s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--bg4);border:1px solid var(--border2);padding:11px 18px;border-radius:10px;font-size:13.5px;font-weight:600;z-index:200;max-width:92vw}
+.toast.err{border-color:rgba(248,81,73,0.5);color:var(--danger)}
+.toast.ok{border-color:rgba(63,185,80,0.5);color:var(--success)}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const {useState,useEffect,useCallback} = React;
+
+// ── CONFIGURATION ─────────────────────────────────────────────────────────
+// Le dépôt GitHub est PUBLIC : aucun identifiant, aucun ID de Sheet ici.
+// Tout se règle dans l'écran Réglages et reste dans le navigateur de chaque utilisateur.
+//   clientId            : ID client OAuth (Google Cloud, type « Application Web »)
+//   apiKey              : facultatif
+//   memoireSpreadsheetId: Google Sheet « La mémoire — Éclairage » (onglets créés par le CRM au besoin)
+//   gmailLibelles       : libellés Gmail à afficher dans Courriel, séparés par des virgules
+const APP_VERSION = 'v1';
+const DEFAULT_CFG = {clientId:'', apiKey:'', memoireSpreadsheetId:'', gmailLibelles:''};
+function loadCfg(){ try{ const r = localStorage.getItem('ems_cfg'); return r ? {...DEFAULT_CFG, ...JSON.parse(r)} : {...DEFAULT_CFG}; }catch(e){ return {...DEFAULT_CFG}; } }
+function saveCfg(c){ try{ localStorage.setItem('ems_cfg', JSON.stringify(c)); }catch(e){} }
+
+// Permissions demandées à la connexion (le moins possible). La lecture de Gmail est demandée seulement en ouvrant Courriel.
+const SCOPES = 'openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/spreadsheets https://www.googleapis.com/auth/drive.file';
+const SCOPE_GMAIL_LIRE = 'https://www.googleapis.com/auth/gmail.modify';
+const DISCOVERY = ['https://sheets.googleapis.com/$discovery/rest?version=v4'];
+
+// ── Petits outils ─────────────────────────────────────────────────────────
+function genId(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+function localDateStr(d){ const x = d || new Date(); return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0'); }
+function todayISO(){ return localDateStr(new Date()); }
+function fmtJour(iso){ if(!iso) return ''; const d = new Date(String(iso).slice(0,10)+'T12:00:00'); return isNaN(d) ? iso : d.toLocaleDateString('fr-CA',{day:'numeric',month:'short'}); }
+function apiErrMsg(e){
+  const code = e && (e.status || (e.result && e.result.error && e.result.error.code));
+  const msg = (e && e.result && e.result.error && e.result.error.message) || (e && e.message) || (e && e.error) || '';
+  if(code===401 || /invalid authentication credentials|UNAUTHENTICATED/i.test(msg)) return 'Ta connexion Google a expiré. Clique « Reconnecter » en haut, puis refais la dernière action.';
+  if(msg) return String(msg);
+  if(typeof e==='string') return e;
+  try{ return JSON.stringify(e); }catch(x){ return 'Erreur inconnue.'; }
+}
+function colLettre(n){ let s=''; n++; while(n>0){ const m=(n-1)%26; s=String.fromCharCode(65+m)+s; n=Math.floor((n-1)/26); } return s; }
+
+// ── Thème ─────────────────────────────────────────────────────────────────
+function getTheme(){ try{ return localStorage.getItem('ems_theme')||'dark'; }catch(e){ return 'dark'; } }
+function useTheme(){
+  const [t,setT]=useState(getTheme);
+  useEffect(()=>{ document.documentElement.setAttribute('data-theme', t); try{ localStorage.setItem('ems_theme', t); }catch(e){} },[t]);
+  return [t,setT];
+}
+function useIsDesktop(){
+  const [d,setD]=useState(()=>window.innerWidth>=900);
+  useEffect(()=>{ const f=()=>setD(window.innerWidth>=900); window.addEventListener('resize',f); return ()=>window.removeEventListener('resize',f); },[]);
+  return d;
+}
+
+// ── Connexion Google ──────────────────────────────────────────────────────
+let tokenClient=null, tokenExpire=0, tokenScopes='', jetonEnCours=null;
+function loadScript(src, globale){
+  if(globale && window[globale]) return Promise.resolve();
+  return new Promise((res,rej)=>{ const s=document.createElement('script'); s.src=src; s.onload=res; s.onerror=rej; document.head.appendChild(s); });
+}
+async function initGoogle(cfg){
+  await loadScript('https://apis.google.com/js/api.js', 'gapi');
+  await new Promise(res=>window.gapi.load('client', res));
+  await window.gapi.client.init({...(cfg.apiKey ? {apiKey:cfg.apiKey} : {}), discoveryDocs:DISCOVERY});
+  avecReessai();
+  await loadScript('https://accounts.google.com/gsi/client', 'google');
+  tokenClient = window.google.accounts.oauth2.initTokenClient({client_id:cfg.clientId, scope:SCOPES, callback:()=>{}});
+}
+function requestToken(prompt, extra){
+  return new Promise((resolve,reject)=>{
+    tokenClient.callback = resp=>{
+      if(resp && resp.access_token){
+        tokenExpire = Date.now() + (Number(resp.expires_in)||3600)*1000;
+        if(resp.scope) tokenScopes = resp.scope;
+        try{ sessionStorage.setItem('ems_tok', JSON.stringify({t:resp.access_token, e:tokenExpire, s:tokenScopes})); }catch(e){}
+        resolve(resp);
+      } else reject(resp);
+    };
+    tokenClient.error_callback = e=>reject(e);
+    tokenClient.requestAccessToken({prompt: prompt!==undefined ? prompt : (window.gapi.client.getToken() ? '' : 'consent'), include_granted_scopes:true, ...(extra ? {scope:SCOPES+' '+extra} : {})});
+  });
+}
+function restoreToken(){
+  try{ const o = JSON.parse(sessionStorage.getItem('ems_tok')||'null');
+    if(o && o.t && o.e > Date.now()+60000){ window.gapi.client.setToken({access_token:o.t}); tokenExpire=o.e; tokenScopes=o.s||''; return true; } }catch(e){}
+  return false;
+}
+function tokenExpired(){ return !!tokenExpire && Date.now() > tokenExpire - 60000; }
+function peutLireCourriels(){ return /gmail\.modify|mail\.google\.com/.test(tokenScopes); }
+// Dans les 10 dernières minutes du jeton, le prochain clic en demande un nouveau (en silence).
+function rafraichirJeton(){
+  if(!jetonEnCours) jetonEnCours = requestToken('').then(r=>{ window.dispatchEvent(new Event('ems-jeton')); return r; }).finally(()=>{ jetonEnCours=null; });
+  return jetonEnCours;
+}
+document.addEventListener('pointerdown', ()=>{ if(tokenClient && tokenExpire && Date.now() > tokenExpire - 10*60000 && !jetonEnCours) rafraichirJeton().catch(()=>{}); }, true);
+// Google Sheets limite les lectures par minute : en cas de « quota », on attend et on réessaie (3 s, 10 s, 25 s).
+function avecReessai(){
+  const sp = window.gapi.client.sheets && window.gapi.client.sheets.spreadsheets; if(!sp || sp.__reessai) return;
+  const env = (obj, nom)=>{ const f = obj[nom]; if(typeof f!=='function') return;
+    obj[nom] = function(params){
+      const essai = async n=>{
+        if(jetonEnCours) await jetonEnCours.catch(()=>{});
+        try{ return await f.call(obj, params); }
+        catch(e){
+          const code = e && (e.status || (e.result && e.result.error && e.result.error.code));
+          if(code===401){ window.dispatchEvent(new Event('ems-jeton-expire')); throw e; }
+          if((code===429 || /quota/i.test(JSON.stringify((e && e.result)||''))) && n<3){ await new Promise(r=>setTimeout(r,[3000,10000,25000][n])); return essai(n+1); }
+          throw e;
+        }
+      };
+      return essai(0);
+    };
+  };
+  ['get','batchUpdate'].forEach(n=>env(sp,n));
+  ['get','batchGet','update','append','clear','batchUpdate'].forEach(n=>env(sp.values,n));
+  sp.__reessai = true;
+}
+
+// ── Google Sheets ─────────────────────────────────────────────────────────
+// Lectures gardées 2 minutes ; toute écriture rend les lectures plus vieilles invalides.
+const CACHE = {}; let ECRIT_T = 0;
+function viderCache(){ Object.keys(CACHE).forEach(k=>delete CACHE[k]); }
+async function lireCache(id, range, force){
+  const k = id+'|'+range, c = CACHE[k];
+  if(!force && c && c.t > ECRIT_T && Date.now()-c.t < 120000) return c.v;
+  const t0 = Date.now();
+  const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range});
+  const v = r.result.values || [];
+  CACHE[k] = {t:t0, v};
+  return v;
+}
+async function ecrire(f){ ECRIT_T = Date.now(); try{ return await f(); } finally { ECRIT_T = Date.now(); } }
+function sheetsAppendRow(id, onglet, ligne){
+  return ecrire(()=>window.gapi.client.sheets.spreadsheets.values.append({spreadsheetId:id, range:onglet+'!A:A', valueInputOption:'RAW', insertDataOption:'INSERT_ROWS', resource:{values:[ligne]}}));
+}
+function sheetsUpdateRow(id, onglet, rang, ligne){
+  return ecrire(()=>window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:onglet+'!A'+rang+':'+colLettre(ligne.length-1)+rang, valueInputOption:'RAW', resource:{values:[ligne]}}));
+}
+// Crée les onglets manquants (avec leur ligne d'en-tête). Ne touche jamais un onglet qui existe déjà.
+async function ensureSheetsExist(id, specs){
+  const meta = await window.gapi.client.sheets.spreadsheets.get({spreadsheetId:id, fields:'sheets.properties.title'});
+  const existants = (meta.result.sheets||[]).map(s=>s.properties.title);
+  const nouveaux = specs.filter(s=>!existants.includes(s.name));
+  if(!nouveaux.length) return;
+  await ecrire(()=>window.gapi.client.sheets.spreadsheets.batchUpdate({spreadsheetId:id, resource:{requests:nouveaux.map(s=>({addSheet:{properties:{title:s.name}}}))}}));
+  for(const s of nouveaux) await ecrire(()=>window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:s.name+'!A1', valueInputOption:'RAW', resource:{values:[s.headers]}}));
+}
+function rowsToObjects(rows, entetes){ return rows.map((r,i)=>{ const o={_row:i+2}; entetes.forEach((h,k)=>{ o[h] = r[k]!==undefined ? r[k] : ''; }); return o; }); }
+function objectToRow(o, entetes){ return entetes.map(h=>o[h]!==undefined ? o[h] : ''); }
+const ongletAbsent = e => /Unable to parse range/i.test(apiErrMsg(e));
+
+// ── UI de base ────────────────────────────────────────────────────────────
+function useToast(){
+  const [msg,setMsg]=useState(null);
+  const show = useCallback((text,type)=>{ setMsg({text,type:type||'ok'}); setTimeout(()=>setMsg(null), 3500); },[]);
+  return [show, msg ? <div className={'toast '+(msg.type==='err'?'err':'ok')}>{msg.text}</div> : null];
+}
+
+// ── Rappels (onglet « Rappels » de La mémoire — Éclairage) ────────────────
+const RAPPELS_ENTETE = ['id','titre','description','dateEcheance','statut','dateCreation'];
+function useRappels(cfg, refreshKey){
+  const id = cfg.memoireSpreadsheetId;
+  const [etat,setEtat]=useState({lu:false, liste:[], err:''});
+  const lire = useCallback(async force=>{
+    if(!id){ setEtat({lu:true, liste:[], err:''}); return; }
+    try{ const v = await lireCache(id, 'Rappels!A1:F', force); setEtat({lu:true, err:'', liste:rowsToObjects(v.slice(1), RAPPELS_ENTETE).filter(r=>r.id)}); }
+    catch(e){ setEtat({lu:true, liste:[], err: ongletAbsent(e) ? '' : apiErrMsg(e)}); }
+  },[id]);
+  useEffect(()=>{ lire(refreshKey>0); },[lire, refreshKey]);
+  const ajouter = async (titre, echeance)=>{
+    await ensureSheetsExist(id, [{name:'Rappels', headers:RAPPELS_ENTETE}]);
+    await sheetsAppendRow(id, 'Rappels', objectToRow({id:genId(), titre, description:'', dateEcheance:echeance||'', statut:'À faire', dateCreation:todayISO()}, RAPPELS_ENTETE));
+    await lire(true);
+  };
+  const basculer = async r=>{
+    const statut = r.statut==='Fait' ? 'À faire' : 'Fait';
+    setEtat(s=>({...s, liste:s.liste.map(x=>x.id===r.id ? {...x, statut} : x)}));
+    try{ await sheetsUpdateRow(id, 'Rappels', r._row, objectToRow({...r, statut}, RAPPELS_ENTETE)); }
+    finally{ await lire(true); }
+  };
+  return {...etat, ajouter, basculer, configure:!!id};
+}
+function RappelsListe({cfg, toast, refreshKey, compact}){
+  const R = useRappels(cfg, refreshKey);
+  const [txt,setTxt]=useState(''), [date,setDate]=useState(''), [busy,setBusy]=useState(false), [voirFaits,setVoirFaits]=useState(false);
+  if(!R.configure) return <div className="muted" style={{fontSize:13}}>Indique l'ID du Sheet « La mémoire — Éclairage » dans Réglages pour garder tes rappels.</div>;
+  const ajouter = async ()=>{ const t = txt.trim(); if(!t || busy) return; setBusy(true);
+    try{ await R.ajouter(t, date); setTxt(''); setDate(''); }catch(e){ toast(apiErrMsg(e),'err'); } setBusy(false); };
+  const auj = todayISO();
+  const liste = R.liste.filter(r=>voirFaits || r.statut!=='Fait').sort((a,b)=>(a.statut==='Fait')-(b.statut==='Fait') || (a.dateEcheance||'9999').localeCompare(b.dateEcheance||'9999'));
+  return <div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+      <input value={txt} onChange={e=>setTxt(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') ajouter(); }} placeholder="Noter un rappel…" style={{flex:'1 1 180px',width:'auto',minWidth:0,padding:'7px 10px'}}/>
+      {!compact && <input type="date" value={date} onChange={e=>setDate(e.target.value)} style={{width:'auto',padding:'7px 10px'}}/>}
+      <button className="btn btn-sm btn-p" disabled={!txt.trim() || busy} onClick={ajouter}>{busy?'…':'Ajouter'}</button>
+    </div>
+    {R.err && <div style={{color:'var(--danger)',fontSize:12.5,marginTop:6}}>{R.err}</div>}
+    {!R.lu && <div className="muted" style={{fontSize:12.5,marginTop:6}}>Lecture…</div>}
+    {liste.map(r=><label key={r.id} style={{display:'flex',gap:8,alignItems:'flex-start',padding:'7px 0',borderBottom:'1px solid var(--border)',fontSize:13.5,cursor:'pointer',opacity:r.statut==='Fait'?.55:1}}>
+      <input type="checkbox" checked={r.statut==='Fait'} onChange={()=>R.basculer(r).catch(e=>toast(apiErrMsg(e),'err'))} style={{width:16,height:16,marginTop:2,flexShrink:0}}/>
+      <span style={{flex:1,textDecoration:r.statut==='Fait'?'line-through':'none'}}>{r.titre}</span>
+      {r.dateEcheance && <span style={{fontSize:12,flexShrink:0,color:r.statut!=='Fait' && r.dateEcheance<auj ? 'var(--danger)' : 'var(--muted)'}}>{fmtJour(r.dateEcheance)}</span>}
+    </label>)}
+    {R.lu && !liste.length && <div className="muted" style={{fontSize:13,marginTop:8}}>Rien à se rappeler.</div>}
+    {!compact && R.liste.some(r=>r.statut==='Fait') && <button className="btn btn-sm" style={{marginTop:10}} onClick={()=>setVoirFaits(v=>!v)}>{voirFaits ? 'Cacher les rappels faits' : 'Afficher aussi les rappels faits'}</button>}
+  </div>;
+}
+
+// ── Gmail dans le CRM ─────────────────────────────────────────────────────
+const GM = 'https://gmail.googleapis.com/gmail/v1/users/me/';
+const gmReq = (path, opts) => window.gapi.client.request({path:GM+path, ...(opts||{})}).then(r=>r.result);
+function gmB64(s){ try{ const bin = atob(String(s||'').replace(/-/g,'+').replace(/_/g,'/')); return new TextDecoder('utf-8').decode(Uint8Array.from(bin, c=>c.charCodeAt(0))); }catch(e){ return ''; } }
+function gmEntete(m, n){ const h = ((m.payload||{}).headers||[]).find(x=>x.name.toLowerCase()===n.toLowerCase()); return h ? h.value : ''; }
+function gmNom(de){ const m = String(de||'').match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>/); return m ? (m[1].trim() || m[2]) : String(de||''); }
+function gmCorps(payload){ let html='', txt=''; const pj=[];
+  const tour = p=>{ if(!p) return;
+    if(p.filename && p.body && p.body.attachmentId) pj.push({nom:p.filename, id:p.body.attachmentId, type:p.mimeType, taille:p.body.size||0});
+    else if(p.mimeType==='text/html' && p.body && p.body.data && !html) html = gmB64(p.body.data);
+    else if(p.mimeType==='text/plain' && p.body && p.body.data && !txt) txt = gmB64(p.body.data);
+    (p.parts||[]).forEach(tour); };
+  tour(payload); return {html, txt, pj}; }
+function gmQuand(ms){ const d = new Date(+ms), auj = new Date(); if(d.toDateString()===auj.toDateString()) return d.toLocaleTimeString('fr-CA',{hour:'2-digit',minute:'2-digit'});
+  return d.toLocaleDateString('fr-CA', d.getFullYear()===auj.getFullYear() ? {day:'numeric',month:'short'} : {day:'numeric',month:'short',year:'numeric'}); }
+function gmVues(cfg){ return [['INBOX','Boîte de réception'], ...String(cfg.gmailLibelles||'').split(',').map(s=>s.trim()).filter(Boolean).map(n=>[n,n])]; }
+// Corps d'un courriel dans un cadre isolé (aucun script), liens dans un nouvel onglet
+function GmCorpsMessage({m}){
+  const {html, txt} = gmCorps(m.payload); const ref = React.useRef(null);
+  const doc = html ? '<base target="_blank"><style>body{font-family:Arial,sans-serif;font-size:14px;margin:8px;color:#222;background:#fff;word-wrap:break-word}img{max-width:100%;height:auto}</style>'+html
+    : '<base target="_blank"><style>body{font-family:Arial,sans-serif;font-size:14px;margin:8px;white-space:pre-wrap;color:#222;background:#fff}</style>'+String(txt||m.snippet||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const ajuster = ()=>{ try{ const f = ref.current; if(f && f.contentDocument) f.style.height = Math.min(4000, f.contentDocument.documentElement.scrollHeight+10)+'px'; }catch(e){} };
+  return <iframe ref={ref} title="courriel" sandbox="allow-popups allow-popups-to-escape-sandbox allow-same-origin" srcDoc={doc} onLoad={()=>{ ajuster(); setTimeout(ajuster, 600); }} style={{width:'100%',border:'none',borderRadius:6,background:'#fff',minHeight:80}}/>;
+}
+function GmailBoite({cfg, email, toast}){
+  const vues = gmVues(cfg);
+  const [ok,setOk]=useState(()=>peutLireCourriels());
+  const [vue,setVueS]=useState(()=>{ try{ const v = localStorage.getItem('ems_gm_vue'); return v && vues.some(x=>x[0]===v) ? v : 'INBOX'; }catch(e){ return 'INBOX'; } });
+  const [labels,setLabels]=useState(null), [nbs,setNbs]=useState({});
+  const [liste,setListe]=useState(null), [suite,setSuite]=useState(null), [err,setErr]=useState('');
+  const [q,setQ]=useState(''), [cherche,setCherche]=useState('');
+  const [ouvert,setOuvert]=useState(null), [occ,setOcc]=useState('');
+  const setVue = v=>{ setVueS(v); setOuvert(null); try{ localStorage.setItem('ems_gm_vue', v); }catch(e){} };
+  const idDe = v => v==='INBOX' ? 'INBOX' : (labels||{})[v];
+  useEffect(()=>{ if(!ok) return; gmReq('labels').then(r=>{ const m={}; (r.labels||[]).forEach(l=>{ m[l.name]=l.id; }); setLabels(m); }).catch(e=>setErr(apiErrMsg(e))); },[ok]);
+  const compter = async ()=>{ if(!labels) return; const n={};
+    await Promise.all(vues.map(async([v])=>{ const id = idDe(v); if(!id) return; try{ const l = await gmReq('labels/'+encodeURIComponent(id)); n[v] = l.threadsUnread||0; }catch(e){} }));
+    setNbs(n); };
+  const charger = async token=>{ const id = idDe(vue);
+    if(!id){ setListe([]); setErr(vue==='INBOX' ? '' : 'Le libellé « '+vue+' » est introuvable dans Gmail.'); return; }
+    setErr(''); if(!token) setListe(null);
+    try{ const r = await gmReq('threads?maxResults=25&labelIds='+encodeURIComponent(id)+(cherche ? '&q='+encodeURIComponent(cherche) : '')+(token ? '&pageToken='+token : ''));
+      const fils = await Promise.all((r.threads||[]).map(t=>gmReq('threads/'+t.id+'?format=metadata&metadataHeaders=From&metadataHeaders=Subject').catch(()=>null)));
+      const l = fils.filter(Boolean).map(t=>{ const ms = t.messages||[], der = ms[ms.length-1]||{}, pre = ms[0]||{};
+        const lbl = [...new Set(ms.flatMap(m=>m.labelIds||[]))];
+        return {id:t.id, sujet:gmEntete(pre,'Subject')||'(sans objet)', de:[...new Set(ms.map(m=>gmNom(gmEntete(m,'From'))))].slice(-3).join(', '),
+          extrait:der.snippet||'', quand:der.internalDate, n:ms.length, nonLu:lbl.includes('UNREAD'), labels:lbl}; });
+      setListe(x=>token ? [...(x||[]), ...l] : l); setSuite(r.nextPageToken||null);
+    }catch(e){ setErr(apiErrMsg(e)); setListe([]); } };
+  useEffect(()=>{ if(ok && labels){ charger(); compter(); } },[ok, labels, vue, cherche]);
+  const modifier = (t, ajout, retrait) => gmReq('threads/'+t.id+'/modify', {method:'POST', body:{addLabelIds:ajout||[], removeLabelIds:retrait||[]}});
+  const ouvrir = async t=>{ setOcc('lire'); try{ const f = await gmReq('threads/'+t.id+'?format=full'); setOuvert({...t, messages:f.messages||[]});
+      if(t.nonLu){ await modifier(t, [], ['UNREAD']); setListe(l=>(l||[]).map(x=>x.id===t.id ? {...x, nonLu:false} : x)); compter(); } }
+    catch(e){ toast('Erreur : '+apiErrMsg(e),'err'); } setOcc(''); };
+  const action = async (t, quoi)=>{ setOcc(quoi);
+    try{
+      if(quoi==='archiver'){ await modifier(t, [], ['INBOX']); if(vue==='INBOX') setListe(l=>(l||[]).filter(x=>x.id!==t.id)); setOuvert(null); toast('Archivé'); }
+      else if(quoi==='nonlu'){ await modifier(t, ['UNREAD'], []); setListe(l=>(l||[]).map(x=>x.id===t.id ? {...x, nonLu:true} : x)); setOuvert(null); }
+      else if(quoi.startsWith('lib:')){ const nom = quoi.slice(4), id = (labels||{})[nom];
+        if(!id) toast('Libellé « '+nom+' » introuvable dans Gmail','err');
+        else { const a = !t.labels.includes(id); await modifier(t, a?[id]:[], a?[]:[id]); const nl = a ? [...t.labels, id] : t.labels.filter(x=>x!==id);
+          setListe(l=>(l||[]).map(x=>x.id===t.id ? {...x, labels:nl} : x)); if(ouvert && ouvert.id===t.id) setOuvert(o=>({...o, labels:nl})); toast((a ? 'Ajouté à ' : 'Retiré de ')+nom); } }
+      compter();
+    }catch(e){ toast('Erreur : '+apiErrMsg(e),'err'); }
+    setOcc(''); };
+  const telecharger = async (m, a)=>{ try{ const r = await gmReq('messages/'+m.id+'/attachments/'+a.id); const bin = atob(String(r.data||'').replace(/-/g,'+').replace(/_/g,'/'));
+      const url = URL.createObjectURL(new Blob([Uint8Array.from(bin, c=>c.charCodeAt(0))], {type:a.type||'application/octet-stream'}));
+      const lien = document.createElement('a'); lien.href = url; lien.download = a.nom; document.body.appendChild(lien); lien.click(); lien.remove(); setTimeout(()=>URL.revokeObjectURL(url), 60000); }
+    catch(e){ toast('Pièce jointe : '+apiErrMsg(e),'err'); } };
+  const lienGmail = t => 'https://mail.google.com/mail/?authuser='+encodeURIComponent(email||'')+'#all/'+t.id;
+  const libsPerso = vues.slice(1).map(v=>v[0]);
+  if(!ok) return <div className="card" style={{fontSize:13.5}}>
+    <div style={{marginBottom:8}}>Pour voir la boîte Gmail ici, Google doit permettre au CRM de lire les courriels. C'est demandé une seule fois.</div>
+    <button className="btn btn-p" onClick={async()=>{ try{ await requestToken('consent', SCOPE_GMAIL_LIRE); setOk(peutLireCourriels()); if(!peutLireCourriels()) toast('Permission refusée — coche « Gmail » dans la fenêtre Google.','err'); }catch(e){ toast('Connexion annulée','err'); } }}>🔓 Autoriser la lecture des courriels</button>
+  </div>;
+  return <div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
+      {vues.map(([v,l])=><button key={v} className={'btn btn-sm'+(vue===v?' btn-p':'')} onClick={()=>setVue(v)}>{l}{nbs[v] ? <span style={{marginLeft:5,background:vue===v?'rgba(255,255,255,.25)':'var(--accent)',color:'#fff',borderRadius:999,padding:'0 6px',fontSize:11}}>{nbs[v]}</span> : null}</button>)}
+      <form onSubmit={e=>{ e.preventDefault(); setCherche(q.trim()); }} style={{flex:'1 1 200px',display:'flex',gap:4,minWidth:0}}>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Chercher (comme dans Gmail)…" style={{flex:1,minWidth:0,padding:'6px 10px'}}/>
+        {cherche && <button type="button" className="btn btn-sm" onClick={()=>{ setQ(''); setCherche(''); }}>✕</button>}
+      </form>
+      <button className="btn btn-sm" title="Relire" onClick={()=>{ charger(); compter(); }}>⟳</button>
+    </div>
+    {err && <div className="card" style={{color:'var(--danger)',fontSize:13,marginBottom:10}}>{err}</div>}
+    {ouvert ? <div className="card">
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:10}}>
+        <button className="btn btn-sm" onClick={()=>setOuvert(null)}>← Retour</button>
+        {ouvert.labels.includes('INBOX') && <button className="btn btn-sm" disabled={!!occ} onClick={()=>action(ouvert,'archiver')}>📥 Archiver</button>}
+        <button className="btn btn-sm" disabled={!!occ} onClick={()=>action(ouvert,'nonlu')}>Marquer non lu</button>
+        {libsPerso.map(n=>{ const a = labels && labels[n] && ouvert.labels.includes(labels[n]);
+          return <button key={n} className={'btn btn-sm'+(a?' btn-p':'')} disabled={!!occ} onClick={()=>action(ouvert,'lib:'+n)}>{a ? '✓ ' : '+ '}{n}</button>; })}
+        <a className="btn btn-sm btn-p" href={lienGmail(ouvert)} target="_blank" rel="noopener" style={{textDecoration:'none',marginLeft:'auto'}}>↩ Répondre dans Gmail</a>
+      </div>
+      <div className="fh" style={{fontSize:18,marginBottom:8}}>{ouvert.sujet}</div>
+      {ouvert.messages.map((m,i)=>{ const pj = gmCorps(m.payload).pj, dernier = i===ouvert.messages.length-1;
+        return <details key={m.id} open={dernier || ouvert.messages.length<=2} style={{borderTop:'1px solid var(--border)',padding:'8px 0'}}>
+          <summary style={{cursor:'pointer',fontSize:13}}><b>{gmNom(gmEntete(m,'From'))}</b> <span className="muted">· {new Date(+m.internalDate).toLocaleString('fr-CA',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}</span>{!dernier && <span className="muted"> — {String(m.snippet||'').slice(0,80)}</span>}</summary>
+          <div className="muted" style={{fontSize:11.5,margin:'2px 0 6px'}}>À : {gmEntete(m,'To')}{gmEntete(m,'Cc') ? ' · Cc : '+gmEntete(m,'Cc') : ''}</div>
+          <GmCorpsMessage m={m}/>
+          {pj.length>0 && <div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:6}}>{pj.map(a=><button key={a.id} className="btn btn-sm" onClick={()=>telecharger(m, a)}>📎 {a.nom} <span className="muted">({Math.max(1,Math.round(a.taille/1024))} Ko)</span></button>)}</div>}
+        </details>; })}
+    </div>
+    : <div className="card" style={{padding:0}}>
+      {liste===null && <div className="muted" style={{padding:14}}>Lecture de Gmail…</div>}
+      {liste && !liste.length && !err && <div className="muted" style={{padding:14}}>{cherche ? 'Rien trouvé.' : vue==='INBOX' ? '🎉 Boîte de réception vide.' : 'Rien ici.'}</div>}
+      {(liste||[]).map(t=><div key={t.id} onClick={()=>ouvrir(t)} style={{display:'flex',gap:10,alignItems:'center',padding:'9px 12px',borderBottom:'1px solid var(--border)',cursor:'pointer',background:t.nonLu?'rgba(var(--accent-rgb),.06)':undefined}}>
+        <span style={{width:8,height:8,borderRadius:'50%',background:t.nonLu?'var(--accent)':'transparent',flexShrink:0}}></span>
+        <div style={{flex:'0 1 170px',minWidth:70,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontWeight:t.nonLu?800:500,fontSize:13.5}}>{t.de}{t.n>1 && <span className="muted" style={{fontWeight:400}}> {t.n}</span>}</div>
+        <div style={{flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:13.5}}>
+          {libsPerso.filter(n=>n!==vue && labels && labels[n] && t.labels.includes(labels[n])).map(n=><span key={n} className="badge" style={{background:'var(--bg4)',color:'var(--text)',marginRight:5}}>{n}</span>)}
+          <span style={{fontWeight:t.nonLu?800:500}}>{t.sujet}</span> <span className="muted">— {t.extrait}</span></div>
+        <span style={{flexShrink:0,fontSize:12,fontWeight:t.nonLu?800:400}} className={t.nonLu?'':'muted'}>{gmQuand(t.quand)}</span>
+        {vue==='INBOX' && <button className="btn btn-sm" title="Archiver" disabled={!!occ} onClick={e=>{ e.stopPropagation(); action(t,'archiver'); }} style={{padding:'1px 7px'}}>📥</button>}
+      </div>)}
+      {suite && <div style={{padding:10,textAlign:'center'}}><button className="btn btn-sm" onClick={()=>charger(suite)}>Plus ancien…</button></div>}
+    </div>}
+    {occ==='lire' && <div className="muted" style={{fontSize:12,marginTop:6}}>Ouverture…</div>}
+  </div>;
+}
+
+// ── Écrans ────────────────────────────────────────────────────────────────
+const A_VENIR = {
+  clients:{titre:'Clients', texte:'La fiche de chaque client : nom, courriel, téléphone, adresse, et toutes ses commandes.', etape:'Étape 2 — La mémoire'},
+  cmdclients:{titre:'Commandes clients', texte:'Chaque commande, ligne par ligne : produit, fournisseur, quantité et où elle en est (commandé, confirmé, BO, expédié, reçu, livré ou ramassé).', etape:'Étape 2 — La mémoire'},
+  cmdfourn:{titre:'Commandes fournisseurs', texte:'Chaque PO envoyé à un fournisseur, avec ses lignes et la commande client à laquelle chaque ligne appartient. Les PO envoyés par courriel s\'inscriront tout seuls.', etape:'Étapes 2 et 3'},
+  fournisseurs:{titre:'Fournisseurs', texte:'Les fournisseurs de luminaires : représentant, courriels de commande, de confirmation et d\'avis de BO.', etape:'Étape 2 — La mémoire'},
+  produits:{titre:'Produits', texte:'Le catalogue : code, description, fournisseur, photo.', etape:'Plus tard'}
+};
+function AVenir({id}){ const x = A_VENIR[id];
+  return <div><h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>{x.titre}</h2>
+    <div className="card"><div style={{fontSize:14,marginBottom:8}}>{x.texte}</div><span className="badge" style={{background:'rgba(var(--accent-rgb),.13)',color:'var(--accent)'}}>À venir · {x.etape}</span></div></div>; }
+
+function TableauDeBord({cfg, email, toast, refreshKey, onNavigate}){
+  const [nonLus,setNonLus]=useState(null);
+  useEffect(()=>{ if(!peutLireCourriels()) return; gmReq('labels/INBOX').then(l=>setNonLus(l.threadsUnread||0)).catch(()=>{}); },[refreshKey]);
+  const jour = new Date().toLocaleDateString('fr-CA',{weekday:'long',day:'numeric',month:'long'});
+  const Tuile = ({n, l, sub, go}) => <div className="card" style={{padding:14,cursor:'pointer'}} onClick={()=>onNavigate(go)}>
+    <div style={{fontSize:24,fontWeight:800}}>{n}</div><div style={{fontSize:13,fontWeight:600}}>{l}</div>{sub && <div className="muted" style={{fontSize:11.5,marginTop:2}}>{sub}</div>}</div>;
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 2px',fontSize:24}}>Bonjour !</h2>
+    <div className="muted" style={{fontSize:13,marginBottom:14}}><span style={{textTransform:'capitalize'}}>{jour}</span>{email ? ' · '+email : ''}</div>
+    {!cfg.memoireSpreadsheetId && <div className="card" style={{marginBottom:14,borderColor:'var(--warning)',fontSize:13.5}}>
+      Pour garder les données : crée un Google Sheet vide « La mémoire — Éclairage » dans le dossier du même nom, puis colle son ID dans <a href="#" onClick={e=>{ e.preventDefault(); onNavigate('reglages'); }} style={{color:'var(--accent)'}}>Réglages</a>.</div>}
+    <div className="dash-tuiles">
+      <Tuile n="—" l="Commandes clients en cours" sub="à venir" go="cmdclients"/>
+      <Tuile n="—" l="Lignes en BO" sub="à venir" go="cmdfourn"/>
+      <Tuile n="—" l="Clients à relancer" sub="à venir" go="cmdclients"/>
+      <Tuile n={nonLus==null ? '—' : nonLus} l="Courriels non lus" sub="boîte de réception" go="courriel"/>
+    </div>
+    <div className="dash-rangee">
+      <div className="card" style={{marginBottom:14}}><div className="fh" style={{fontSize:15,marginBottom:8}}>Rappels</div><RappelsListe cfg={cfg} toast={toast} refreshKey={refreshKey} compact/></div>
+    </div>
+  </div>;
+}
+
+function RappelsView({cfg, toast, refreshKey}){
+  return <div><h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Rappels</h2><div className="card"><RappelsListe cfg={cfg} toast={toast} refreshKey={refreshKey}/></div></div>;
+}
+
+function CourrielView({cfg, email, toast}){
+  return <div><h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Courriel</h2><GmailBoite cfg={cfg} email={email} toast={toast}/></div>;
+}
+
+function SettingsView({cfg, onSave, avantConnexion, email, onDeconnexion}){
+  const [f,setF]=useState(cfg);
+  const [theme,setTheme]=useTheme();
+  const origine = window.location.origin;
+  const champ = (k, l, ph, aide) => <div className="field"><label>{l}</label><input value={f[k]||''} placeholder={ph||''} onChange={e=>setF({...f,[k]:e.target.value})}/>{aide && <div className="muted" style={{fontSize:11.5,marginTop:3}}>{aide}</div>}</div>;
+  const propre = {...f, clientId:String(f.clientId||'').trim(), apiKey:String(f.apiKey||'').trim(), memoireSpreadsheetId:String(f.memoireSpreadsheetId||'').trim().replace(/^.*\/d\/([^/]+).*$/,'$1'), gmailLibelles:String(f.gmailLibelles||'').split(',').map(s=>s.trim()).filter(Boolean).join(', ')};
+  return <div style={{maxWidth:560}}>
+    <h2 className="fh" style={{margin:'0 0 12px',fontSize:22}}>Réglages</h2>
+    <div className="card" style={{marginBottom:12,fontSize:13}}>
+      <div className="muted" style={{fontSize:12,fontWeight:700,textTransform:'uppercase'}}>Origine à autoriser dans Google Cloud</div>
+      <div style={{display:'flex',gap:8,alignItems:'center',marginTop:4}}>
+        <code style={{background:'var(--bg3)',padding:'4px 8px',borderRadius:6,userSelect:'all'}}>{origine==='null' ? '(ouvre le CRM depuis son adresse web)' : origine}</code>
+        {origine!=='null' && navigator.clipboard && <button className="btn btn-sm" onClick={()=>navigator.clipboard.writeText(origine)}>Copier</button>}
+      </div>
+      <div className="muted" style={{fontSize:11.5,marginTop:4}}>Google Cloud › Clients › ton client Web › Origines JavaScript autorisées.</div>
+    </div>
+    <div className="card">
+      {champ('clientId','ID client Google','…apps.googleusercontent.com','Google Cloud › Clients. Gardé dans ce navigateur seulement, jamais dans le dépôt.')}
+      {!avantConnexion && <>
+        {champ('memoireSpreadsheetId','ID du Sheet « La mémoire — Éclairage »','Colle l\'ID ou l\'adresse du Sheet','Le CRM y crée ses onglets au besoin (ex. Rappels).')}
+        {champ('gmailLibelles','Libellés Gmail à afficher dans Courriel','ex. Fournisseurs, À traiter','Séparés par des virgules. La boîte de réception est toujours là.')}
+        {champ('apiKey','Clé d\'API Google (facultatif)','')}
+        <div className="field"><label>Thème</label><select value={theme} onChange={e=>setTheme(e.target.value)}><option value="dark">Sombre</option><option value="light">Clair</option></select></div>
+      </>}
+      <button className="btn btn-p" disabled={!propre.clientId} onClick={()=>onSave(propre)}>Enregistrer</button>
+      {!avantConnexion && <div style={{marginTop:14,paddingTop:12,borderTop:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+        <span className="muted" style={{fontSize:12}}>{email ? 'Connecté : '+email+' · ' : ''}Version {APP_VERSION}</span>
+        <button className="btn btn-sm" onClick={onDeconnexion}>Se déconnecter</button>
+      </div>}
+    </div>
+  </div>;
+}
+
+// ── Application ───────────────────────────────────────────────────────────
+const NAV = [
+  ['dashboard','Tableau de bord'],['clients','Clients'],['cmdclients','Commandes clients'],['cmdfourn','Commandes fournisseurs'],
+  ['fournisseurs','Fournisseurs'],['produits','Produits'],['courriel','Courriel'],['rappels','Rappels'],['reglages','Réglages']
+];
+function App(){
+  const [cfg,setCfg]=useState(loadCfg);
+  const [etat,setEtat]=useState('init');     // config | init | login | ok | erreur
+  const [err,setErr]=useState('');
+  const [email,setEmail]=useState('');
+  const [nav,setNav]=useState(()=>{ try{ return sessionStorage.getItem('ems_nav')||'dashboard'; }catch(e){ return 'dashboard'; } });
+  const [menu,setMenu]=useState(false);
+  const [expire,setExpire]=useState(false);
+  const [refreshKey,setRefreshKey]=useState(0);
+  const [toast,toastNode]=useToast();
+  const isDesktop = useIsDesktop();
+  useTheme();
+
+  useEffect(()=>{
+    if(!cfg.clientId){ setEtat('config'); return; }
+    initGoogle(cfg).then(()=>setEtat(restoreToken() ? 'ok' : 'login')).catch(e=>{ setErr(apiErrMsg(e)); setEtat('erreur'); });
+  },[]);
+  useEffect(()=>{
+    if(etat!=='ok') return;
+    window.gapi.client.request({path:'https://www.googleapis.com/oauth2/v3/userinfo'}).then(r=>setEmail((r.result||{}).email||'')).catch(()=>{});
+    const verifier = ()=>{ if(tokenExpired()) setExpire(true); };
+    const exp = ()=>setExpire(true), neuf = ()=>setExpire(false);
+    window.addEventListener('ems-jeton-expire', exp); window.addEventListener('ems-jeton', neuf);
+    window.addEventListener('focus', verifier); const id = setInterval(verifier, 30000);
+    return ()=>{ window.removeEventListener('ems-jeton-expire', exp); window.removeEventListener('ems-jeton', neuf); window.removeEventListener('focus', verifier); clearInterval(id); };
+  },[etat]);
+
+  const sauverReglages = c=>{
+    const changeClient = c.clientId!==cfg.clientId;
+    saveCfg(c); setCfg(c);
+    if(changeClient){ try{ sessionStorage.removeItem('ems_tok'); }catch(e){} window.location.reload(); return; }
+    viderCache(); setRefreshKey(k=>k+1); toast('Réglages enregistrés.');
+  };
+  const connecter = async ()=>{ try{ await requestToken(); setExpire(false); setEtat('ok'); }catch(e){ toast('Connexion refusée ou annulée.','err'); } };
+  const reconnecter = async ()=>{ try{ await requestToken(''); setExpire(false); viderCache(); setRefreshKey(k=>k+1); toast('Reconnecté.'); }catch(e){ toast('Reconnexion annulée.','err'); } };
+  const deconnecter = ()=>{ try{ const t = window.gapi.client.getToken(); if(t) window.google.accounts.oauth2.revoke(t.access_token, ()=>{}); window.gapi.client.setToken(null); sessionStorage.removeItem('ems_tok'); }catch(e){} tokenExpire=0; tokenScopes=''; setEmail(''); setEtat('login'); };
+  const aller = id=>{ setNav(id); setMenu(false); try{ sessionStorage.setItem('ems_nav', id); }catch(e){} window.scrollTo(0,0); };
+
+  const Logo = () => <div className="logo"><span className="dot"></span>Éclairage Moderne Saran <span className="muted" style={{fontWeight:400,fontSize:11.5,fontFamily:'var(--font-body)'}}>{APP_VERSION}</span></div>;
+  if(etat==='init') return <div className="login-screen"><div className="spin"></div></div>;
+  if(etat==='config') return <div className="login-screen"><Logo/><div className="muted" style={{maxWidth:420,textAlign:'center',fontSize:13.5}}>Première fois sur cet appareil : colle l'ID client Google (Google Cloud › Clients).</div><div style={{width:'100%',maxWidth:560}}><SettingsView cfg={cfg} onSave={sauverReglages} avantConnexion/></div>{toastNode}</div>;
+  if(etat==='erreur') return <div className="login-screen"><Logo/><div className="card" style={{maxWidth:480,color:'var(--danger)',fontSize:13.5}}>Impossible de démarrer la connexion Google : {err}</div><button className="btn" onClick={()=>setEtat('config')}>Vérifier l'ID client</button></div>;
+  if(etat==='login') return <div className="login-screen"><Logo/><div className="muted">Commandes, fournisseurs, BO et relances des clients.</div><button className="btn btn-p" onClick={connecter}>Se connecter avec Google</button><button className="btn btn-sm" onClick={()=>setEtat('config')}>Réglages</button>{toastNode}</div>;
+
+  let ecran;
+  if(nav==='dashboard') ecran = <TableauDeBord cfg={cfg} email={email} toast={toast} refreshKey={refreshKey} onNavigate={aller}/>;
+  else if(nav==='courriel') ecran = <CourrielView key={'c'+refreshKey+cfg.gmailLibelles} cfg={cfg} email={email} toast={toast}/>;
+  else if(nav==='rappels') ecran = <RappelsView cfg={cfg} toast={toast} refreshKey={refreshKey}/>;
+  else if(nav==='reglages') ecran = <SettingsView cfg={cfg} onSave={sauverReglages} email={email} onDeconnexion={deconnecter}/>;
+  else if(A_VENIR[nav]) ecran = <AVenir id={nav}/>;
+  else ecran = <TableauDeBord cfg={cfg} email={email} toast={toast} refreshKey={refreshKey} onNavigate={aller}/>;
+
+  return <div>
+    <div className="topbar">
+      <div style={{display:'flex',alignItems:'center',gap:10,minWidth:0}}>{!isDesktop && <button className="btn btn-sm" onClick={()=>setMenu(true)} aria-label="Menu" style={{fontSize:18,padding:'4px 11px'}}>☰</button>}<Logo/></div>
+      <div style={{display:'flex',alignItems:'center',gap:10}}>
+        {isDesktop && email && <span className="muted" style={{fontSize:12}}>{email}</span>}
+        <button className="btn btn-sm" title="Relire les données" onClick={()=>{ if(tokenExpired()){ reconnecter(); return; } viderCache(); setRefreshKey(k=>k+1); }}>⟳</button>
+      </div>
+    </div>
+    {expire && <div style={{background:'rgba(210,153,34,0.15)',borderBottom:'1px solid var(--warning)',padding:'10px 16px',display:'flex',gap:12,alignItems:'center',justifyContent:'center',flexWrap:'wrap',fontSize:13.5}}>
+      <span>⏱ Ta connexion Google a expiré (elle dure 1 h). Rien n'est perdu.</span><button className="btn btn-sm btn-p" onClick={reconnecter}>Reconnecter</button></div>}
+    <div className="shell">
+      {!isDesktop && menu && <div className="nav-fond" onClick={()=>setMenu(false)}/>}
+      <div className={'nav'+(!isDesktop && menu ? ' ouvert' : '')}>
+        {!isDesktop && <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'2px 4px 10px'}}><b className="fh" style={{fontSize:15}}>Menu</b><button className="btn btn-sm" onClick={()=>setMenu(false)}>✕</button></div>}
+        {NAV.map(([id,l])=><div key={id} className={'nav-item'+(nav===id?' active':'')} onClick={()=>aller(id)}>{l}</div>)}
+      </div>
+      <div className="main">{ecran}</div>
+    </div>
+    {toastNode}
+  </div>;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
