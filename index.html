@@ -5,34 +5,35 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Éclairage Saran">
-<meta name="theme-color" content="#0d1117">
+<meta name="theme-color" content="#f4efe6">
 <title>Éclairage Moderne Saran</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💡</text></svg>">
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone@7/babel.min.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,500;8..60,600;8..60,700&family=DM+Sans:wght@300;400;500;700&display=swap" rel="stylesheet">
 <style>
 :root{
+  /* Beige : comme les fiches et la présentation d'Éclairage Moderne Saran */
+  --bg:#f4efe6;--bg2:#fffcf6;--bg3:#efe7da;--bg4:#e6dccb;
+  --border:rgba(70,52,34,0.11);--border2:rgba(70,52,34,0.2);
+  --text:#2b2622;--muted:#7b6f62;
+  --accent:#b5652f;--accent2:#8f4b22;--accent-rgb:181,101,47;
+  --success:#3f7d3a;--warning:#a8730c;--danger:#b8392f;
+  --font-head:'Source Serif 4',Georgia,serif;--font-body:'DM Sans',sans-serif;
+  --topbar-h:62px;--btn-p:#3a3532;
+}
+[data-theme="dark"]{
   --bg:#0d1117;--bg2:#161b22;--bg3:#1c2333;--bg4:#21262d;
   --border:rgba(255,255,255,0.07);--border2:rgba(255,255,255,0.13);
   --text:#e6edf3;--muted:#7d8590;
   --accent:#f0a020;--accent2:#e0761a;--accent-rgb:240,160,32;
-  --success:#3fb950;--warning:#d29922;--danger:#f85149;
-  --font-head:'Syne',sans-serif;--font-body:'DM Sans',sans-serif;
-  --topbar-h:54px;
-}
-[data-theme="light"]{
-  --bg:#f4f5f7;--bg2:#ffffff;--bg3:#eceef2;--bg4:#e3e6ec;
-  --border:rgba(0,0,0,0.08);--border2:rgba(0,0,0,0.14);
-  --text:#1a1f26;--muted:#5b6472;
-  --accent:#c77a00;--accent2:#b35d00;--accent-rgb:199,122,0;
-  --success:#1a7f37;--warning:#9a6700;--danger:#cf222e;
+  --success:#3fb950;--warning:#d29922;--danger:#f85149;--btn-p:#e0761a;
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--font-body);height:100%}
 #root{min-height:100vh}
-h1,h2,h3,.fh{font-family:var(--font-head);font-weight:800;letter-spacing:-0.01em}
+h1,h2,h3,.fh{font-family:var(--font-head);font-weight:600;letter-spacing:-0.005em}
 a{color:inherit}
 button{font-family:var(--font-body);cursor:pointer;touch-action:manipulation}
 input,select,textarea{font-family:var(--font-body);background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:8px;padding:9px 11px;font-size:14px;width:100%}
@@ -40,10 +41,12 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
 .muted{color:var(--muted)}
 .topbar{position:sticky;top:0;z-index:40;height:var(--topbar-h);display:flex;align-items:center;justify-content:space-between;gap:10px;padding:0 16px;background:var(--bg2);border-bottom:1px solid var(--border)}
 .logo{font-family:var(--font-head);font-weight:800;font-size:17px;display:flex;align-items:center;gap:8px;white-space:nowrap}
-.logo .dot{width:11px;height:11px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 0 10px rgba(var(--accent-rgb),.6)}
+.logo img{height:44px;width:auto;display:block}
+[data-theme="dark"] .logo img{background:#f4efe6;border-radius:6px;padding:2px 6px}
+.login-screen .logo img{height:64px}
 .btn{border:1px solid var(--border2);background:var(--bg3);color:var(--text);border-radius:9px;padding:9px 14px;font-size:13.5px;font-weight:600;display:inline-flex;align-items:center;gap:6px}
 .btn:active{transform:scale(0.97)}
-.btn-p{background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;color:#fff}
+.btn-p{background:var(--btn-p);border:none;color:#fff}
 .btn-danger{border-color:rgba(248,81,73,0.4);color:var(--danger)}
 .btn-sm{padding:6px 10px;font-size:12.5px;border-radius:7px}
 .btn:disabled{opacity:0.5;cursor:not-allowed}
@@ -57,7 +60,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
 @media(max-width:760px){.main{padding:14px 12px}}
 .dash-rangee{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:0 14px;align-items:start}
 .dash-tuiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:10px;margin-bottom:14px}
-.card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px;box-shadow:0 1px 2px rgba(70,52,34,0.05)}
 .badge{display:inline-flex;align-items:center;padding:3px 9px;border-radius:20px;font-size:11.5px;font-weight:700}
 .field{margin-bottom:11px}
 .field label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:0.02em}
@@ -81,7 +84,7 @@ const {useState,useEffect,useCallback} = React;
 //   apiKey              : facultatif
 //   memoireSpreadsheetId: Google Sheet « La mémoire — Éclairage » (onglets créés par le CRM au besoin)
 //   gmailLibelles       : libellés Gmail à afficher dans Courriel, séparés par des virgules
-const APP_VERSION = 'v6';
+const APP_VERSION = 'v7';
 // v2 : l'ID client est public (Google l'envoie à chaque visiteur) : il est mis ici pour ne plus avoir à le coller.
 const CLIENT_ID_ECLAIRAGE = '788746263116-innh7g6ogpeln3mdn4mosan1q3h25i8h.apps.googleusercontent.com';
 const DEFAULT_CFG = {clientId:CLIENT_ID_ECLAIRAGE, apiKey:'', memoireSpreadsheetId:'', gmailLibelles:''};
@@ -109,10 +112,10 @@ function apiErrMsg(e){
 function colLettre(n){ let s=''; n++; while(n>0){ const m=(n-1)%26; s=String.fromCharCode(65+m)+s; n=Math.floor((n-1)/26); } return s; }
 
 // ── Thème ─────────────────────────────────────────────────────────────────
-function getTheme(){ try{ return localStorage.getItem('ems_theme')||'dark'; }catch(e){ return 'dark'; } }
+function getTheme(){ try{ return localStorage.getItem('ems_theme2')||'beige'; }catch(e){ return 'beige'; } }
 function useTheme(){
   const [t,setT]=useState(getTheme);
-  useEffect(()=>{ document.documentElement.setAttribute('data-theme', t); try{ localStorage.setItem('ems_theme', t); }catch(e){} },[t]);
+  useEffect(()=>{ document.documentElement.setAttribute('data-theme', t); try{ localStorage.setItem('ems_theme2', t); }catch(e){} },[t]);
   return [t,setT];
 }
 function useIsDesktop(){
@@ -836,7 +839,7 @@ function SettingsView({cfg, onSave, avantConnexion, email, onDeconnexion}){
         {champ('memoireSpreadsheetId','ID du Sheet « La mémoire — Éclairage »','Colle l\'ID ou l\'adresse du Sheet','Le CRM y crée ses onglets au besoin (ex. Rappels).')}
         {champ('gmailLibelles','Libellés Gmail à afficher dans Courriel','ex. Fournisseurs, À traiter','Séparés par des virgules. La boîte de réception est toujours là.')}
         {champ('apiKey','Clé d\'API Google (facultatif)','')}
-        <div className="field"><label>Thème</label><select value={theme} onChange={e=>setTheme(e.target.value)}><option value="dark">Sombre</option><option value="light">Clair</option></select></div>
+        <div className="field"><label>Thème</label><select value={theme} onChange={e=>setTheme(e.target.value)}><option value="beige">Beige (Éclairage)</option><option value="dark">Sombre</option></select></div>
       </>}
       <button className="btn btn-p" disabled={!propre.clientId} onClick={()=>onSave(propre)}>Enregistrer</button>
       {!avantConnexion && <div style={{marginTop:14,paddingTop:12,borderTop:'1px solid var(--border)',display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap'}}>
@@ -891,7 +894,7 @@ function App(){
   const deconnecter = ()=>{ try{ const t = window.gapi.client.getToken(); if(t) window.google.accounts.oauth2.revoke(t.access_token, ()=>{}); window.gapi.client.setToken(null); sessionStorage.removeItem('ems_tok'); }catch(e){} tokenExpire=0; tokenScopes=''; setEmail(''); setEtat('login'); };
   const aller = id=>{ setNav(id); setMenu(false); try{ sessionStorage.setItem('ems_nav', id); }catch(e){} window.scrollTo(0,0); };
 
-  const Logo = () => <div className="logo"><span className="dot"></span>Éclairage Moderne Saran <span className="muted" style={{fontWeight:400,fontSize:11.5,fontFamily:'var(--font-body)'}}>{APP_VERSION}</span></div>;
+  const Logo = () => <div className="logo"><img src="logo-eclairage.png" alt="Éclairage Moderne Saran"/><span className="muted" style={{fontWeight:400,fontSize:11.5,fontFamily:'var(--font-body)'}}>{APP_VERSION}</span></div>;
   if(etat==='init') return <div className="login-screen"><div className="spin"></div></div>;
   if(etat==='config') return <div className="login-screen"><Logo/><div className="muted" style={{maxWidth:420,textAlign:'center',fontSize:13.5}}>Première fois sur cet appareil : colle l'ID client Google (Google Cloud › Clients).</div><div style={{width:'100%',maxWidth:560}}><SettingsView cfg={cfg} onSave={sauverReglages} avantConnexion/></div>{toastNode}</div>;
   if(etat==='erreur') return <div className="login-screen"><Logo/><div className="card" style={{maxWidth:480,color:'var(--danger)',fontSize:13.5}}>Impossible de démarrer la connexion Google : {err}</div><button className="btn" onClick={()=>setEtat('config')}>Vérifier l'ID client</button></div>;
