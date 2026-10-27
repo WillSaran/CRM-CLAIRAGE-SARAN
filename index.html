@@ -81,7 +81,7 @@ const {useState,useEffect,useCallback} = React;
 //   apiKey              : facultatif
 //   memoireSpreadsheetId: Google Sheet « La mémoire — Éclairage » (onglets créés par le CRM au besoin)
 //   gmailLibelles       : libellés Gmail à afficher dans Courriel, séparés par des virgules
-const APP_VERSION = 'v5';
+const APP_VERSION = 'v6';
 // v2 : l'ID client est public (Google l'envoie à chaque visiteur) : il est mis ici pour ne plus avoir à le coller.
 const CLIENT_ID_ECLAIRAGE = '788746263116-innh7g6ogpeln3mdn4mosan1q3h25i8h.apps.googleusercontent.com';
 const DEFAULT_CFG = {clientId:CLIENT_ID_ECLAIRAGE, apiKey:'', memoireSpreadsheetId:'', gmailLibelles:''};
@@ -402,14 +402,14 @@ function GmailBoite({cfg, email, toast}){
 const PO_ENTETE = ['PO','Version','Type','Fournisseur','Envoyé à','Date commandée','Date requise','Sous-total','Total','Lignes','PDF','Lien courriel','Inscrit le','Lu avec'];
 const LIGNE_ENTETE = ['PO','Ligne','Produit','Description','Qté','Unité','Montant','Commande client','Client','Réquisition','Statut','Note','Date prévue','Note suivi','Modifié le','Par'];
 const FOURN_ENTETE = ['Fournisseur','Préfixe code','Agence','No client Éclairage','Lieu','Commande en ligne','Téléphone principal','Téléphone rep / autre','Minimum 2026','Minimum prépayé 2026','Délai de livraison','Note délai','Note','Courriels','Ramassage','Coefficient prix détail (coût ×)','Source'];
-const STATUTS = ['Commandé','Confirmé','BO','Expédié','Reçu','Livré / ramassé','Annulé','Retour demandé'];
-const STATUT_COULEUR = {'Commandé':'var(--muted)','Confirmé':'#58a6ff','BO':'var(--warning)','Expédié':'var(--accent)','Reçu':'var(--success)','Livré / ramassé':'var(--success)','Annulé':'var(--muted)','Retour demandé':'var(--danger)'};
+const STATUTS = ['Commandé','Confirmé','BO','Expédié','Prêt à ramasser','Reçu','Livré / ramassé','Annulé','Retour demandé'];
+const STATUT_COULEUR = {'Commandé':'var(--muted)','Confirmé':'#58a6ff','BO':'var(--warning)','Expédié':'var(--accent)','Prêt à ramasser':'#a371f7','Reçu':'var(--success)','Livré / ramassé':'var(--success)','Annulé':'var(--muted)','Retour demandé':'var(--danger)'};
 const FERME = s => /^(Reçu|Livré|Annulé)/.test(s||'');
 const estStock = c => /COMMANDE DE STK|SHOWROOM/i.test(c||'');
 const argent = x => { const n = Number(x); return x==='' || x==null || isNaN(n) ? '' : n.toLocaleString('fr-CA',{style:'currency',currency:'CAD'}); };
 const lienDrive = id => id ? 'https://drive.google.com/file/d/'+id+'/view' : '';
 const COURRIEL_ENTETE = ['Clé','PO','Date','De','Courriel','Sujet','Type','ETA (texte)','Extrait','Lien','Lu le'];
-const TYPE_COULEUR = {'BO / ETA':'var(--warning)','Expédition':'var(--accent)','Confirmation':'#58a6ff','Annulation':'var(--danger)','Facture':'var(--muted)','Autre':'var(--muted)'};
+const TYPE_COULEUR = {'BO / ETA':'var(--warning)','Expédition':'var(--accent)','Expédition prévue':'var(--accent)','Prêt à ramasser':'#a371f7','Confirmation':'#58a6ff','Annulation':'var(--danger)','Facture':'var(--muted)','Autre':'var(--muted)'};
 
 function useMemoire(cfg, refreshKey){
   const id = cfg.memoireSpreadsheetId;
@@ -512,8 +512,8 @@ function LigneSuivi({l, M, email, toast, montrerPO, montrerClient}){
 function AppliquerSuggestion({p, M, email, toast}){
   const [busy,setBusy]=useState(false);
   const x = (M.msgsPar[p.PO]||[])[0]; if(!x) return null;
-  const cible = x.Type==='Expédition' ? 'Expédié' : x.Type==='Confirmation' ? 'Confirmé' : null; if(!cible) return null;
-  const ls = p._ls.filter(l=> cible==='Expédié' ? /^(Commandé|Confirmé|BO)$/.test(l._statut) : l._statut==='Commandé');
+  const cible = x.Type==='Expédition' ? 'Expédié' : x.Type==='Prêt à ramasser' ? 'Prêt à ramasser' : x.Type==='Confirmation' ? 'Confirmé' : null; if(!cible) return null;
+  const ls = p._ls.filter(l=> cible==='Confirmé' ? l._statut==='Commandé' : cible==='Expédié' ? /^(Commandé|Confirmé|BO)$/.test(l._statut) : /^(Commandé|Confirmé|BO|Expédié)$/.test(l._statut));
   if(!ls.length) return null;
   const go = async ()=>{ setBusy(true); try{ await M.majLignes(ls, {Statut:cible, 'Note suivi':'d\'après le courriel du '+x.Date+' ('+x.De+')'}, email); toast(ls.length+' ligne(s) → '+cible); }catch(e){ toast(apiErrMsg(e),'err'); } setBusy(false); };
   return <button className="btn btn-sm" style={{marginTop:8}} disabled={busy} onClick={go}>{busy?'…':'Mettre les '+ls.length+' ligne(s) ouvertes à « '+cible+' » (courriel du '+fmtJour(x.Date)+')'}</button>;
