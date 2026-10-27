@@ -81,9 +81,11 @@ const {useState,useEffect,useCallback} = React;
 //   apiKey              : facultatif
 //   memoireSpreadsheetId: Google Sheet « La mémoire — Éclairage » (onglets créés par le CRM au besoin)
 //   gmailLibelles       : libellés Gmail à afficher dans Courriel, séparés par des virgules
-const APP_VERSION = 'v1';
-const DEFAULT_CFG = {clientId:'', apiKey:'', memoireSpreadsheetId:'', gmailLibelles:''};
-function loadCfg(){ try{ const r = localStorage.getItem('ems_cfg'); return r ? {...DEFAULT_CFG, ...JSON.parse(r)} : {...DEFAULT_CFG}; }catch(e){ return {...DEFAULT_CFG}; } }
+const APP_VERSION = 'v2';
+// v2 : l'ID client est public (Google l'envoie à chaque visiteur) : il est mis ici pour ne plus avoir à le coller.
+const CLIENT_ID_ECLAIRAGE = '788746263116-innh7g6ogpeln3mdn4mosan1q3h25i8h.apps.googleusercontent.com';
+const DEFAULT_CFG = {clientId:CLIENT_ID_ECLAIRAGE, apiKey:'', memoireSpreadsheetId:'', gmailLibelles:''};
+function loadCfg(){ try{ const r = localStorage.getItem('ems_cfg'); if(!r) return {...DEFAULT_CFG}; const c = {...DEFAULT_CFG, ...JSON.parse(r)}; if(!c.clientId) c.clientId = CLIENT_ID_ECLAIRAGE; return c; }catch(e){ return {...DEFAULT_CFG}; } }
 function saveCfg(c){ try{ localStorage.setItem('ems_cfg', JSON.stringify(c)); }catch(e){} }
 
 // Permissions demandées à la connexion (le moins possible). La lecture de Gmail est demandée seulement en ouvrant Courriel.
@@ -454,7 +456,7 @@ function SettingsView({cfg, onSave, avantConnexion, email, onDeconnexion}){
       <div className="muted" style={{fontSize:11.5,marginTop:4}}>Google Cloud › Clients › ton client Web › Origines JavaScript autorisées.</div>
     </div>
     <div className="card">
-      {champ('clientId','ID client Google','…apps.googleusercontent.com','Google Cloud › Clients. Gardé dans ce navigateur seulement, jamais dans le dépôt.')}
+      {champ('clientId','ID client Google','…apps.googleusercontent.com','Google Cloud › Clients. Déjà inscrit (ID d\'Éclairage) ; à changer seulement si on crée un nouvel ID.')}
       {!avantConnexion && <>
         {champ('memoireSpreadsheetId','ID du Sheet « La mémoire — Éclairage »','Colle l\'ID ou l\'adresse du Sheet','Le CRM y crée ses onglets au besoin (ex. Rappels).')}
         {champ('gmailLibelles','Libellés Gmail à afficher dans Courriel','ex. Fournisseurs, À traiter','Séparés par des virgules. La boîte de réception est toujours là.')}
