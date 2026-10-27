@@ -81,7 +81,7 @@ const {useState,useEffect,useCallback} = React;
 //   apiKey              : facultatif
 //   memoireSpreadsheetId: Google Sheet « La mémoire — Éclairage » (onglets créés par le CRM au besoin)
 //   gmailLibelles       : libellés Gmail à afficher dans Courriel, séparés par des virgules
-const APP_VERSION = 'v3';
+const APP_VERSION = 'v5';
 // v2 : l'ID client est public (Google l'envoie à chaque visiteur) : il est mis ici pour ne plus avoir à le coller.
 const CLIENT_ID_ECLAIRAGE = '788746263116-innh7g6ogpeln3mdn4mosan1q3h25i8h.apps.googleusercontent.com';
 const DEFAULT_CFG = {clientId:CLIENT_ID_ECLAIRAGE, apiKey:'', memoireSpreadsheetId:'', gmailLibelles:''};
@@ -408,26 +408,30 @@ const FERME = s => /^(Reçu|Livré|Annulé)/.test(s||'');
 const estStock = c => /COMMANDE DE STK|SHOWROOM/i.test(c||'');
 const argent = x => { const n = Number(x); return x==='' || x==null || isNaN(n) ? '' : n.toLocaleString('fr-CA',{style:'currency',currency:'CAD'}); };
 const lienDrive = id => id ? 'https://drive.google.com/file/d/'+id+'/view' : '';
+const COURRIEL_ENTETE = ['Clé','PO','Date','De','Courriel','Sujet','Type','ETA (texte)','Extrait','Lien','Lu le'];
+const TYPE_COULEUR = {'BO / ETA':'var(--warning)','Expédition':'var(--accent)','Confirmation':'#58a6ff','Annulation':'var(--danger)','Facture':'var(--muted)','Autre':'var(--muted)'};
 
 function useMemoire(cfg, refreshKey){
   const id = cfg.memoireSpreadsheetId;
-  const [d,setD]=useState({lu:false, err:'', po:[], lignes:[], fourn:[], aVerifier:[]});
+  const [d,setD]=useState({lu:false, err:'', po:[], lignes:[], fourn:[], aVerifier:[], msgsPar:{}, msgs:[]});
   const lire = useCallback(async force=>{
-    if(!id){ setD({lu:true, err:'', po:[], lignes:[], fourn:[], aVerifier:[]}); return; }
+    if(!id){ setD({lu:true, err:'', po:[], lignes:[], fourn:[], aVerifier:[], msgsPar:{}, msgs:[]}); return; }
     const un = async (range, entete) => { try{ return rowsToObjects((await lireCache(id, range, force)).slice(1), entete); }catch(e){ if(ongletAbsent(e)) return []; throw e; } };
     try{
-      const [po, lignes, fourn, av] = await Promise.all([
+      const [po, lignes, fourn, av, msgs] = await Promise.all([
         un("'Commandes fournisseurs'!A1:N", PO_ENTETE), un("'Lignes PO'!A1:P", LIGNE_ENTETE),
-        un('Fournisseurs!A1:Q', FOURN_ENTETE), un("'À vérifier'!A1:H", ['PO','Version','Envoyé à','Date','Raison','Lien courriel','Noté le','Lu avec'])]);
+        un('Fournisseurs!A1:Q', FOURN_ENTETE), un("'À vérifier'!A1:H", ['PO','Version','Envoyé à','Date','Raison','Lien courriel','Noté le','Lu avec']),
+        un("'Courriels PO'!A1:K", COURRIEL_ENTETE)]);
+      const msgsPar = {}; msgs.filter(x=>x.PO).sort((a,b)=>String(b.Date).localeCompare(String(a.Date))).forEach(x=>{ (msgsPar[x.PO] = msgsPar[x.PO] || []).push(x); });
       const parPO = {}; po.filter(p=>p.PO).forEach(p=>{ parPO[p.PO] = p; });
       lignes.forEach(l=>{ const p = parPO[l.PO] || {}; l._po = p; l._statut = l.Statut || 'Commandé';
         l._date = p['Date commandée'] || ''; l._fourn = p.Fournisseur || p['Envoyé à'] || ''; });
-      setD({lu:true, err:'', po:po.filter(p=>p.PO), lignes:lignes.filter(l=>l.PO), fourn:fourn.filter(f=>f.Fournisseur), aVerifier:av.filter(a=>a.PO)});
+      setD({lu:true, err:'', po:po.filter(p=>p.PO), lignes:lignes.filter(l=>l.PO), fourn:fourn.filter(f=>f.Fournisseur), aVerifier:av.filter(a=>a.PO), msgsPar, msgs:msgs.filter(x=>x.PO)});
     }catch(e){ setD(x=>({...x, lu:true, err:apiErrMsg(e)})); }
   },[id]);
   useEffect(()=>{ lire(refreshKey>0); },[lire, refreshKey]);
   // Met à jour une ligne (Statut + M à P). Vérifie d'abord que la rangée est toujours la même ligne (le script a pu en ajouter).
-  const majLigne = async (l, champs, email)=>{
+  const majLigne = async (l, champs, email, sansRelire)=>{
     const r0 = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:"'Lignes PO'!A"+l._row+':C'+l._row});
     const v = ((r0.result.values||[])[0])||[];
     let rang = l._row;
@@ -442,9 +446,28 @@ function useMemoire(cfg, refreshKey){
       {range:"'Lignes PO'!K"+rang, values:[[n.Statut||'Commandé']]},
       {range:"'Lignes PO'!M1:P1", values:[LIGNE_ENTETE.slice(12)]},
       {range:"'Lignes PO'!M"+rang+':P'+rang, values:[[n['Date prévue']||'', n['Note suivi']||'', n['Modifié le'], n['Par']]]}]}}));
-    await lire(true);
+    if(!sansRelire) await lire(true);
   };
-  return {...d, configure:!!id, majLigne, relire:()=>lire(true)};
+  const majLignes = async (ls, champs, email)=>{ for(const l of ls) await majLigne(l, champs, email, true); await lire(true); };
+  return {...d, configure:!!id, majLigne, majLignes, relire:()=>lire(true)};
+}
+
+function MessagesFourn({msgs, max}){
+  const [tout,setTout]=useState(false);
+  if(!msgs || !msgs.length) return <div className="muted" style={{fontSize:12.5,padding:'4px 0'}}>Aucun courriel du fournisseur relié à ce PO pour l'instant.</div>;
+  const liste = tout ? msgs : msgs.slice(0, max||3);
+  return <div>
+    {liste.map(x=><div key={x.Clé} style={{padding:'7px 0',borderBottom:'1px solid var(--border)',fontSize:12.5}}>
+      <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+        <span className="badge" style={{color:TYPE_COULEUR[x.Type]||'var(--muted)',background:'var(--bg3)'}}>{x.Type}</span>
+        <b>{fmtJour(x.Date)}</b><span className="muted">{x.De}</span>
+        {x.Lien && <a href={x.Lien} target="_blank" rel="noopener" style={{marginLeft:'auto',color:'var(--accent)'}}>Ouvrir ↗</a>}
+      </div>
+      {x['ETA (texte)'] && <div style={{marginTop:3,fontWeight:700,color:x.Type==='BO / ETA'?'var(--warning)':'inherit'}}>« {x['ETA (texte)']} »</div>}
+      <div className="muted" style={{marginTop:2}}>{x.Extrait || x.Sujet}</div>
+    </div>)}
+    {msgs.length>(max||3) && <button className="btn btn-sm" style={{marginTop:6}} onClick={()=>setTout(t=>!t)}>{tout ? 'Moins' : 'Voir les '+msgs.length+' courriels'}</button>}
+  </div>;
 }
 
 function Pastille({s}){ const c = STATUT_COULEUR[s]||'var(--muted)';
@@ -485,6 +508,17 @@ function LigneSuivi({l, M, email, toast, montrerPO, montrerClient}){
   </div>;
 }
 
+// Le dernier courriel dit « Expédition » ou « Confirmation » : un bouton pour l'appliquer aux lignes ouvertes (c'est toi qui cliques).
+function AppliquerSuggestion({p, M, email, toast}){
+  const [busy,setBusy]=useState(false);
+  const x = (M.msgsPar[p.PO]||[])[0]; if(!x) return null;
+  const cible = x.Type==='Expédition' ? 'Expédié' : x.Type==='Confirmation' ? 'Confirmé' : null; if(!cible) return null;
+  const ls = p._ls.filter(l=> cible==='Expédié' ? /^(Commandé|Confirmé|BO)$/.test(l._statut) : l._statut==='Commandé');
+  if(!ls.length) return null;
+  const go = async ()=>{ setBusy(true); try{ await M.majLignes(ls, {Statut:cible, 'Note suivi':'d\'après le courriel du '+x.Date+' ('+x.De+')'}, email); toast(ls.length+' ligne(s) → '+cible); }catch(e){ toast(apiErrMsg(e),'err'); } setBusy(false); };
+  return <button className="btn btn-sm" style={{marginTop:8}} disabled={busy} onClick={go}>{busy?'…':'Mettre les '+ls.length+' ligne(s) ouvertes à « '+cible+' » (courriel du '+fmtJour(x.Date)+')'}</button>;
+}
+
 function Recherche({q, setQ, ph, children}){
   return <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}}>
     <input value={q} onChange={e=>setQ(e.target.value)} placeholder={ph} style={{flex:'1 1 220px',width:'auto'}}/>{children}</div>;
@@ -523,6 +557,7 @@ function CmdFournView({cfg, email, toast, refreshKey}){
           <div className="muted" style={{fontSize:12.5}}>Commandé {fmtJour(p['Date commandée'])}{p['Date requise'] ? ' · requis '+fmtJour(p['Date requise']) : ''} · {p._ls.length} ligne(s) · {p.Total ? argent(p.Total) : 'prix à confirmer'}</div>
         </div>
         <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap'}}>
+          {(M.msgsPar[p.PO]||[])[0] && <span className="badge" style={{color:TYPE_COULEUR[M.msgsPar[p.PO][0].Type],background:'var(--bg3)'}}>✉ {M.msgsPar[p.PO][0].Type} · {fmtJour(M.msgsPar[p.PO][0].Date)}</span>}
           {p._retard && <span className="badge" style={{color:'var(--danger)'}}>En retard</span>}
           {p._bo>0 && <span className="badge" style={{color:'var(--warning)'}}>{p._bo} en BO</span>}
           <span className="badge" style={{color:p._ouv?'var(--accent)':'var(--success)'}}>{p._ouv ? p._ouv+' ouverte(s)' : 'Tout reçu'}</span>
@@ -534,6 +569,10 @@ function CmdFournView({cfg, email, toast, refreshKey}){
           {p['Lien courriel'] && <a className="btn btn-sm" href={p['Lien courriel']} target="_blank" rel="noopener">✉ Courriel envoyé</a>}
           <span className="muted" style={{fontSize:12,alignSelf:'center'}}>Envoyé à {p['Envoyé à']}</span>
         </div>
+        <div style={{margin:'8px 0 4px'}} className="fh">Ce que le fournisseur a dit</div>
+        <MessagesFourn msgs={M.msgsPar[p.PO]}/>
+        <AppliquerSuggestion p={p} M={M} email={email} toast={toast}/>
+        <div style={{margin:'10px 0 0'}} className="fh">Lignes</div>
         {p._ls.map(l=><LigneSuivi key={l._row} l={l} M={M} email={email} toast={toast} montrerClient/>)}
       </div>}
     </div>)}
@@ -550,7 +589,7 @@ function grouperClients(lignes){
     c.lignes.push(l); if(l._date > c.date) c.date = l._date; });
   return Object.values(g).map(c=>({...c, ouv:c.lignes.filter(l=>!FERME(l._statut)).length, bo:c.lignes.filter(l=>l._statut==='BO').length}));
 }
-function CmdClientsView({cfg, email, toast, refreshKey}){
+function CmdClientsView({cfg, email, toast, refreshKey, onClient}){
   const M = useMemoire(cfg, refreshKey);
   const [q,setQ]=useState(''), [filtre,setFiltre]=useState('ouvertes'), [ouvert,setOuvert]=useState(null), [nb,setNb]=useState(40);
   const p0 = PasConfigure({M}); if(p0) return <div><h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Commandes clients</h2>{p0}</div>;
@@ -573,7 +612,9 @@ function CmdClientsView({cfg, email, toast, refreshKey}){
           <span className="badge" style={{color:c.ouv?'var(--accent)':'var(--success)'}}>{c.ouv ? c.ouv+' à recevoir' : 'Tout reçu'}</span>
         </div>
       </div>
-      {ouvert===c.no && <div style={{marginTop:8}}>{c.lignes.map(l=><LigneSuivi key={l._row} l={l} M={M} email={email} toast={toast} montrerPO/>)}</div>}
+      {ouvert===c.no && <div style={{marginTop:8}}>
+        <button className="btn btn-sm" style={{marginBottom:4}} onClick={()=>onClient(cleClient(c.client))}>👤 Fiche de {nomClient(c.client)}</button>
+        {c.lignes.map(l=><LigneSuivi key={l._row} l={l} M={M} email={email} toast={toast} montrerPO/>)}</div>}
     </div>)}
     {liste.length>nb && <button className="btn" onClick={()=>setNb(n=>n+40)}>Afficher plus</button>}
     {!liste.length && <div className="card muted">Aucune commande pour ce filtre.</div>}
@@ -605,11 +646,118 @@ function FournisseursView({cfg, refreshKey}){
   </div>;
 }
 
+// ── Répertoire des clients (bâti à partir des Tags des PO) ──
+const sansAccent = s => String(s||'').normalize('NFD').replace(/[̀-ͯ]/g,'');
+// « TREMBLAY NATHALIE+ stock », « BERNIER GINETTE + STK », « PARADIS DIANE (STOCK SHOWROOM) » → le client seulement
+const nomClient = c => String(c||'').replace(/\s*\(?\s*\+?\s*(STO?C?K|STK|SOCK)\b.*$/i,'').replace(/\s*\((STOCK|SHOWROOM)[^)]*\)\s*$/i,'').replace(/\s+/g,' ').trim();
+const cleClient = c => sansAccent(nomClient(c)).toUpperCase().replace(/[^A-Z0-9&]+/g,' ').trim();
+function grouperRepertoire(lignes){
+  const g = {};
+  lignes.filter(l=>l.Client && !estStock(l.Client)).forEach(l=>{
+    const k = cleClient(l.Client); if(!k) return;
+    const c = g[k] || (g[k] = {cle:k, nom:nomClient(l.Client), lignes:[], cmds:new Set(), pos:new Set(), fourn:new Set(), dernier:''});
+    c.lignes.push(l); c.cmds.add(l['Commande client']); c.pos.add(l.PO); if(l._fourn) c.fourn.add(l._fourn); if(l._date > c.dernier) c.dernier = l._date; });
+  return Object.values(g).map(c=>({...c, ouv:c.lignes.filter(l=>!FERME(l._statut)).length, bo:c.lignes.filter(l=>l._statut==='BO').length}));
+}
+function FicheClient({c, M, email, toast, onRetour}){
+  const [tout,setTout]=useState(false);
+  const parCmd = {}; c.lignes.forEach(l=>{ (parCmd[l['Commande client']] = parCmd[l['Commande client']] || []).push(l); });
+  const cmds = Object.keys(parCmd).map(no=>({no, ls:parCmd[no], date:parCmd[no].reduce((m,l)=>l._date>m?l._date:m,''), ouv:parCmd[no].filter(l=>!FERME(l._statut)).length}))
+    .filter(x=>tout || x.ouv).sort((a,b)=>b.date.localeCompare(a.date));
+  const total = c.lignes.reduce((s,l)=>s+(Number(l.Montant)||0),0);
+  return <div>
+    <button className="btn btn-sm" onClick={onRetour} style={{marginBottom:10}}>← Répertoire</button>
+    <h2 className="fh" style={{margin:'0 0 4px',fontSize:22}}>{c.nom}</h2>
+    <div className="muted" style={{fontSize:13,marginBottom:12}}>{c.cmds.size} commande(s) · {c.pos.size} PO · {c.lignes.length} produit(s) commandé(s) · coût total {argent(total)} · dernier PO {fmtJour(c.dernier)}</div>
+    <div className="dash-tuiles">
+      <div className="card" style={{padding:12}}><div style={{fontSize:22,fontWeight:800,color:c.ouv?'var(--accent)':'var(--success)'}}>{c.ouv}</div><div style={{fontSize:12.5}}>produit(s) à recevoir</div></div>
+      <div className="card" style={{padding:12}}><div style={{fontSize:22,fontWeight:800,color:c.bo?'var(--warning)':'inherit'}}>{c.bo}</div><div style={{fontSize:12.5}}>en BO</div></div>
+      <div className="card" style={{padding:12}}><div style={{fontSize:13,fontWeight:600}}>Fournisseurs</div><div className="muted" style={{fontSize:12}}>{[...c.fourn].join(', ')}</div></div>
+    </div>
+    <div className="card muted" style={{fontSize:12.5,marginBottom:12}}>Courriel, téléphone et adresse : à venir (lus dans tes factures et soumissions envoyées au client).</div>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',margin:'4px 0 8px'}}>
+      <div className="fh" style={{fontSize:16}}>{tout ? 'Toutes les commandes' : 'Commandes ouvertes'}</div>
+      <button className="btn btn-sm" onClick={()=>setTout(t=>!t)}>{tout ? 'Seulement les ouvertes' : 'Voir aussi les commandes reçues'}</button>
+    </div>
+    {cmds.map(x=><div key={x.no} className="card" style={{marginBottom:8,padding:12}}>
+      <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}><b>Commande {x.no}</b><span className="muted" style={{fontSize:12.5}}>{fmtJour(x.date)} · {x.ouv ? x.ouv+' à recevoir' : 'tout reçu'}</span></div>
+      {x.ls.map(l=><LigneSuivi key={l._row} l={l} M={M} email={email} toast={toast} montrerPO/>)}
+      {(()=>{ const ms = [...new Set(x.ls.map(l=>l.PO))].flatMap(po=>M.msgsPar[po]||[]).sort((a,b)=>String(b.Date).localeCompare(String(a.Date)));
+        return ms.length ? <div style={{marginTop:8}}><div className="muted" style={{fontSize:11.5,fontWeight:700}}>CE QUE LES FOURNISSEURS ONT DIT</div><MessagesFourn msgs={ms} max={2}/></div> : null; })()}
+    </div>)}
+    {!cmds.length && <div className="card muted">Aucune commande ouverte. Tout est reçu.</div>}
+  </div>;
+}
+function ClientsView({cfg, email, toast, refreshKey, choisi, setChoisi}){
+  const M = useMemoire(cfg, refreshKey);
+  const [q,setQ]=useState(''), [filtre,setFiltre]=useState('ouverts'), [nb,setNb]=useState(60);
+  const p0 = PasConfigure({M}); if(p0) return <div><h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Clients</h2>{p0}</div>;
+  const rep = grouperRepertoire(M.lignes);
+  const c = choisi && rep.find(x=>x.cle===choisi);
+  if(c) return <FicheClient c={c} M={M} email={email} toast={toast} onRetour={()=>setChoisi(null)}/>;
+  const liste = rep.filter(x=>filtre==='tous' || (filtre==='ouverts' && x.ouv) || (filtre==='bo' && x.bo))
+    .filter(x=>contient([x.nom,[...x.cmds],[...x.pos],x.lignes.map(l=>l.Produit)], q))
+    .sort((a,b)=> filtre==='tous' ? a.nom.localeCompare(b.nom) : b.dernier.localeCompare(a.dernier));
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Clients</h2>
+    <Recherche q={q} setQ={setQ} ph="Chercher : nom, no de commande, PO, produit…">
+      <select value={filtre} onChange={e=>setFiltre(e.target.value)} style={{width:'auto'}}>
+        <option value="ouverts">Avec des produits à recevoir</option><option value="bo">Avec un produit en BO</option><option value="tous">Tous (A à Z)</option></select>
+    </Recherche>
+    <div className="muted" style={{fontSize:12.5,marginBottom:8}}>{liste.length} client(s) sur {rep.length} · d'après les Tags de tes PO depuis le 1er juin 2026</div>
+    {liste.slice(0,nb).map(x=><div key={x.cle} className="card" style={{marginBottom:6,padding:'10px 12px',cursor:'pointer',display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}} onClick={()=>{ setChoisi(x.cle); window.scrollTo(0,0); }}>
+      <div style={{minWidth:0}}><div style={{fontWeight:700}}>{x.nom}</div><div className="muted" style={{fontSize:12}}>{x.cmds.size} commande(s) · {[...x.cmds].slice(0,3).join(', ')}{x.cmds.size>3?'…':''} · {[...x.fourn].slice(0,3).join(', ')}</div></div>
+      <div style={{display:'flex',gap:6,alignItems:'center'}}>{x.bo>0 && <span className="badge" style={{color:'var(--warning)'}}>{x.bo} en BO</span>}<span className="badge" style={{color:x.ouv?'var(--accent)':'var(--success)'}}>{x.ouv ? x.ouv+' à recevoir' : 'Tout reçu'}</span><span className="muted" style={{fontSize:12}}>{fmtJour(x.dernier)}</span></div>
+    </div>)}
+    {liste.length>nb && <button className="btn" onClick={()=>setNb(n=>n+60)}>Afficher plus</button>}
+  </div>;
+}
+
+// ── Produits (tout ce qui a été commandé, avec coût et prix détail) ──
+function fournDe(l, fourns){
+  const code = String(l.Produit||'').toUpperCase().replace(/^\*/,'');
+  const pref = fourns.filter(f=>f['Préfixe code'] && (f['Préfixe code']==='#' ? code.startsWith('#') : f['Préfixe code'].length>=2 && code.startsWith(f['Préfixe code'].toUpperCase())))
+    .sort((a,b)=>b['Préfixe code'].length-a['Préfixe code'].length)[0];
+  if(pref) return pref;
+  const n = String(l._fourn||'').toUpperCase().replace(/[^A-Z]/g,'');
+  return fourns.find(f=>{ const m = String(f.Fournisseur).toUpperCase().replace(/[^A-Z]/g,'').slice(0,5); return m.length>=3 && n.includes(m); }) || null;
+}
+const coef = f => { const m = String((f||{})['Coefficient prix détail (coût ×)']||'').match(/^\s*(\d+(?:[.,]\d+)?)\s*$/); return m ? Number(m[1].replace(',','.')) : null; };
+function ProduitsView({cfg, refreshKey}){
+  const M = useMemoire(cfg, refreshKey);
+  const [q,setQ]=useState(''), [ouvert,setOuvert]=useState(null), [nb,setNb]=useState(60);
+  const p0 = PasConfigure({M}); if(p0) return <div><h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Produits</h2>{p0}</div>;
+  const g = {};
+  M.lignes.filter(l=>l.Produit && Number(l.Qté)>0).forEach(l=>{
+    const k = String(l.Produit).toUpperCase(); const p = g[k] || (g[k] = {code:l.Produit, desc:'', lignes:[], qte:0, dernier:null});
+    if(String(l.Description).length > p.desc.length && !/^[,\s]/.test(l.Description)) p.desc = l.Description;
+    p.lignes.push(l); p.qte += Number(l.Qté)||0;
+    if(Number(l.Montant)>0 && (!p.dernier || l._date >= p.dernier._date)) p.dernier = l; });
+  const liste = Object.values(g).map(p=>{ const f = fournDe(p.lignes[0], M.fourn); const cu = p.dernier ? Number(p.dernier.Montant)/Number(p.dernier.Qté) : null; const k = coef(f);
+      return {...p, f, cout:cu, detail: cu && k ? cu*k : null, fournNom: f ? f.Fournisseur : p.lignes[0]._fourn}; })
+    .filter(p=>contient([p.code,p.desc,p.fournNom], q))
+    .sort((a,b)=>b.lignes.length-a.lignes.length || a.code.localeCompare(b.code));
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Produits</h2>
+    <Recherche q={q} setQ={setQ} ph="Chercher : code, description, fournisseur…"/>
+    <div className="muted" style={{fontSize:12.5,marginBottom:8}}>{liste.length} produit(s) commandé(s) depuis le 1er juin 2026 · coût = dernier prix payé · prix détail = coût × coefficient du fournisseur</div>
+    {liste.slice(0,nb).map(p=><div key={p.code} className="card" style={{marginBottom:6,padding:'10px 12px'}}>
+      <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',cursor:'pointer'}} onClick={()=>setOuvert(o=>o===p.code?null:p.code)}>
+        <div style={{minWidth:0}}><div style={{fontWeight:700,fontSize:13.5}}>{p.code} <span className="muted" style={{fontWeight:400}}>· {p.fournNom}</span></div><div className="muted" style={{fontSize:12}}>{p.desc}</div></div>
+        <div style={{textAlign:'right',fontSize:12.5}}>{p.cout!=null && <div>coût {argent(p.cout)}</div>}{p.detail!=null && <div style={{color:'var(--accent)',fontWeight:700}}>détail ≈ {argent(p.detail)}</div>}<div className="muted">{p.lignes.length} fois · {p.qte} unités</div></div>
+      </div>
+      {ouvert===p.code && <div style={{marginTop:8,borderTop:'1px solid var(--border)',paddingTop:6}}>
+        {p.lignes.sort((a,b)=>b._date.localeCompare(a._date)).map(l=><div key={l._row} style={{fontSize:12.5,padding:'4px 0',display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}>
+          <span>{fmtJour(l._date)} · PO {l.PO} · {l.Qté} × {l.Montant ? argent(Number(l.Montant)/Number(l.Qté)) : 'prix à confirmer'}</span>
+          <span className="muted">{l.Client ? (estStock(l.Client) ? 'Stock' : nomClient(l.Client)) : 'Stock ?'} · <Pastille s={l._statut}/></span></div>)}
+      </div>}
+    </div>)}
+    {liste.length>nb && <button className="btn" onClick={()=>setNb(n=>n+60)}>Afficher plus</button>}
+  </div>;
+}
+
 // ── Écrans ────────────────────────────────────────────────────────────────
-const A_VENIR = {
-  clients:{titre:'Clients', texte:'La fiche de chaque client : nom, courriel, téléphone, adresse, et toutes ses commandes. En attendant, les clients sont visibles par leurs commandes (menu Commandes clients), grâce au Tag de tes PO.', etape:'Prochaine étape'},
-  produits:{titre:'Produits', texte:'Le catalogue : code, description, fournisseur, coût et prix détail (avec le coefficient du fournisseur).', etape:'Plus tard'}
-};
+const A_VENIR = {};
 function AVenir({id}){ const x = A_VENIR[id];
   return <div><h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>{x.titre}</h2>
     <div className="card"><div style={{fontSize:14,marginBottom:8}}>{x.texte}</div><span className="badge" style={{background:'rgba(var(--accent-rgb),.13)',color:'var(--accent)'}}>À venir · {x.etape}</span></div></div>; }
@@ -645,6 +793,13 @@ function TableauDeBord({cfg, email, toast, refreshKey, onNavigate}){
         {retard.slice(0,8).map(l=><div key={l._row} style={{fontSize:13,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
           <b>{l.Client && !estStock(l.Client) ? l.Client : 'Stock'}</b> · {l.Qté} × {l.Produit}<div className="muted" style={{fontSize:12}}>PO {l.PO} · {l._fourn} · {l['Date prévue'] ? 'prévu '+fmtJour(l['Date prévue']) : 'requis '+fmtJour(l._po['Date requise'])}</div></div>)}
         {retard.length>8 && <div className="muted" style={{fontSize:12,marginTop:6}}>et {retard.length-8} autre(s) — menu Commandes fournisseurs, filtre « En retard ».</div>}
+      </div>}
+      {M.lu && M.msgs.length>0 && <div className="card" style={{marginBottom:14}}><div className="fh" style={{fontSize:15,marginBottom:4}}>Nouvelles des fournisseurs</div>
+        {M.msgs.slice().sort((a,b)=>String(b.Date).localeCompare(String(a.Date))).slice(0,8).map(x=>{ const cl = [...new Set(M.lignes.filter(l=>l.PO===x.PO && l.Client && !estStock(l.Client)).map(l=>nomClient(l.Client)))];
+          return <div key={x.Clé} style={{fontSize:12.5,padding:'6px 0',borderBottom:'1px solid var(--border)'}}>
+            <span className="badge" style={{color:TYPE_COULEUR[x.Type],background:'var(--bg3)'}}>{x.Type}</span> <b>PO {x.PO}</b> · {fmtJour(x.Date)} · {x.De}
+            {x['ETA (texte)'] && <div style={{fontWeight:700}}>« {x['ETA (texte)']} »</div>}
+            <div className="muted">{cl.length ? '👤 '+cl.slice(0,3).join(', ') : 'Stock'}</div></div>; })}
       </div>}
       <div className="card" style={{marginBottom:14}}><div className="fh" style={{fontSize:15,marginBottom:8}}>Rappels</div><RappelsListe cfg={cfg} toast={toast} refreshKey={refreshKey} compact/></div>
     </div>
@@ -706,6 +861,7 @@ function App(){
   const [menu,setMenu]=useState(false);
   const [expire,setExpire]=useState(false);
   const [refreshKey,setRefreshKey]=useState(0);
+  const [clientChoisi,setClientChoisi]=useState(null);
   const [toast,toastNode]=useToast();
   const isDesktop = useIsDesktop();
   useTheme();
@@ -747,7 +903,9 @@ function App(){
   else if(nav==='rappels') ecran = <RappelsView cfg={cfg} toast={toast} refreshKey={refreshKey}/>;
   else if(nav==='reglages') ecran = <SettingsView cfg={cfg} onSave={sauverReglages} email={email} onDeconnexion={deconnecter}/>;
   else if(nav==='cmdfourn') ecran = <CmdFournView cfg={cfg} email={email} toast={toast} refreshKey={refreshKey}/>;
-  else if(nav==='cmdclients') ecran = <CmdClientsView cfg={cfg} email={email} toast={toast} refreshKey={refreshKey}/>;
+  else if(nav==='cmdclients') ecran = <CmdClientsView cfg={cfg} email={email} toast={toast} refreshKey={refreshKey} onClient={k=>{ setClientChoisi(k); aller('clients'); }}/>;
+  else if(nav==='clients') ecran = <ClientsView cfg={cfg} email={email} toast={toast} refreshKey={refreshKey} choisi={clientChoisi} setChoisi={setClientChoisi}/>;
+  else if(nav==='produits') ecran = <ProduitsView cfg={cfg} refreshKey={refreshKey}/>;
   else if(nav==='fournisseurs') ecran = <FournisseursView cfg={cfg} refreshKey={refreshKey}/>;
   else if(A_VENIR[nav]) ecran = <AVenir id={nav}/>;
   else ecran = <TableauDeBord cfg={cfg} email={email} toast={toast} refreshKey={refreshKey} onNavigate={aller}/>;
@@ -766,7 +924,7 @@ function App(){
       {!isDesktop && menu && <div className="nav-fond" onClick={()=>setMenu(false)}/>}
       <div className={'nav'+(!isDesktop && menu ? ' ouvert' : '')}>
         {!isDesktop && <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'2px 4px 10px'}}><b className="fh" style={{fontSize:15}}>Menu</b><button className="btn btn-sm" onClick={()=>setMenu(false)}>✕</button></div>}
-        {NAV.map(([id,l])=><div key={id} className={'nav-item'+(nav===id?' active':'')} onClick={()=>aller(id)}>{l}</div>)}
+        {NAV.map(([id,l])=><div key={id} className={'nav-item'+(nav===id?' active':'')} onClick={()=>{ if(id==='clients') setClientChoisi(null); aller(id); }}>{l}</div>)}
       </div>
       <div className="main">{ecran}</div>
     </div>
