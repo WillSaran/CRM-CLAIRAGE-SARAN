@@ -84,7 +84,8 @@ const {useState,useEffect,useCallback,useContext} = React;
 //   apiKey              : facultatif
 //   memoireSpreadsheetId: Google Sheet « La mémoire — Éclairage » (onglets créés par le CRM au besoin)
 //   gmailLibelles       : libellés Gmail à afficher dans Courriel, séparés par des virgules
-const APP_VERSION = 'v8';
+const APP_VERSION = 'v9';
+// v9 : fiches fournisseurs modifiables (minimums, délais, téléphones…), contacts par fournisseur (onglet « Contacts fournisseurs ») et notes par fournisseur.
 // v8 : fil de notes (onglet « Notes » de La mémoire : date + qui, jamais effacé, du plus récent au plus vieux)
 //      et connexion gardée sur l'appareil (plus besoin de tout refaire en rouvrant l'onglet).
 // v2 : l'ID client est public (Google l'envoie à chaque visiteur) : il est mis ici pour ne plus avoir à le coller.
@@ -460,14 +461,28 @@ function useMemoire(cfg, refreshKey){
     if(!sansRelire) await lire(true);
   };
   const majLignes = async (ls, champs, email)=>{ for(const l of ls) await majLigne(l, champs, email, true); await lire(true); };
-  return {...d, configure:!!id, majLigne, majLignes, relire:()=>lire(true)};
+  // v9 : modifier une fiche fournisseur (onglet « Fournisseurs »). Vérifie d'abord que la rangée est toujours le même fournisseur.
+  const majFourn = async (f, champs)=>{
+    const r0 = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:'Fournisseurs!A'+f._row+':A'+f._row});
+    let rang = f._row;
+    if(String((((r0.result.values||[])[0])||[])[0]||'')!==String(f.Fournisseur)){
+      const tout = (await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:'Fournisseurs!A2:A'})).result.values||[];
+      const i = tout.findIndex(r=>String(r[0])===String(f.Fournisseur));
+      if(i<0) throw new Error('Ce fournisseur a été déplacé dans La mémoire. Rafraîchis (⟳) et recommence.');
+      rang = i+2;
+    }
+    await sheetsUpdateRow(id, 'Fournisseurs', rang, objectToRow({...f, ...champs}, FOURN_ENTETE));
+    await lire(true);
+  };
+  const ajouterFourn = async champs=>{ await ensureSheetsExist(id, [{name:'Fournisseurs', headers:FOURN_ENTETE}]); await sheetsAppendRow(id, 'Fournisseurs', objectToRow({...champs, Source:'Ajouté dans le CRM'}, FOURN_ENTETE)); await lire(true); };
+  return {...d, configure:!!id, majLigne, majLignes, majFourn, ajouterFourn, relire:()=>lire(true)};
 }
 
 // ── Notes (onglet « Notes » de La mémoire) ────────────────────────────────
 // Remplace les notes écrites sur les bons papier : chaque note garde sa date et qui l'a écrite,
 // rien n'est jamais effacé, et on les lit du plus récent au plus vieux.
 // Une note peut viser une ligne de PO, un PO au complet ou une commande client.
-const NOTES_ENTETE = ['id','Date','Par','PO','Ligne','Produit','Commande client','Client','Texte'];
+const NOTES_ENTETE = ['id','Date','Par','PO','Ligne','Produit','Commande client','Client','Texte','Fournisseur'];
 const NOMS_EQUIPE = ['Bianca','Linda','Nancy','Marie-Jade','Mark','Marie'];
 const NotesCtx = React.createContext(null);
 function getNom(){ try{ return localStorage.getItem('ems_nom')||''; }catch(e){ return ''; } }
@@ -494,7 +509,7 @@ function useNotes(cfg, refreshKey, actif){
   const lire = useCallback(async force=>{
     if(!actif) return;
     if(!id){ setS({lu:true, err:'', liste:[]}); return; }
-    try{ const v = await lireCache(id, 'Notes!A1:I', force);
+    try{ const v = await lireCache(id, 'Notes!A1:J', force);
       setS({lu:true, err:'', liste:rowsToObjects(v.slice(1), NOTES_ENTETE).filter(n=>n.id && String(n.Texte).trim()).sort((a,b)=>String(b.Date).localeCompare(String(a.Date)) || b._row-a._row)}); }
     catch(e){ if(ongletAbsent(e)) setS({lu:true, err:'', liste:[]}); else setS(x=>({...x, lu:true, err:apiErrMsg(e)})); }
   },[id, actif]);
@@ -515,7 +530,7 @@ function ChoixNom({nom, setNom}){
   </div>;
 }
 function NoteItem({n, contexte}){
-  const ctx = [n.PO && 'PO '+n.PO, n.Produit, n.Client && nomClient(n.Client), !n.PO && n['Commande client'] && 'cmd '+n['Commande client']].filter(Boolean).join(' · ');
+  const ctx = [n.Fournisseur, n.PO && 'PO '+n.PO, n.Produit, n.Client && nomClient(n.Client), !n.PO && n['Commande client'] && 'cmd '+n['Commande client']].filter(Boolean).join(' · ');
   return <div style={{padding:'7px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
     <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'baseline'}}><b>{fmtNoteDate(n.Date)}</b><span style={{color:'var(--accent)',fontWeight:700}}>{n.Par || '—'}</span>{contexte && ctx && <span className="muted" style={{fontSize:12}}>· {ctx}</span>}</div>
     <div style={{whiteSpace:'pre-wrap',marginTop:2}}>{n.Texte}</div>
@@ -552,11 +567,11 @@ function NotesView({refreshKey}){
   const {N} = useContext(NotesCtx) || {};
   const [q,setQ]=useState(''), [nb,setNb]=useState(60);
   if(!N || !N.configure) return <div><h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Notes</h2><div className="card muted">Indique l'ID du Sheet « La mémoire — Éclairage » dans Réglages.</div></div>;
-  const liste = N.liste.filter(n=>contient([n.Texte,n.Par,n.PO,n.Produit,n.Client,n['Commande client']], q));
+  const liste = N.liste.filter(n=>contient([n.Texte,n.Par,n.PO,n.Produit,n.Client,n['Commande client'],n.Fournisseur], q));
   return <div>
     <h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Notes</h2>
     <Recherche q={q} setQ={setQ} ph="Chercher : client, PO, produit, qui, texte…"/>
-    <div className="muted" style={{fontSize:12.5,marginBottom:8}}>{liste.length} note(s) · de la plus récente à la plus vieille · pour en ajouter une, ouvre un PO, une ligne ou une commande client</div>
+    <div className="muted" style={{fontSize:12.5,marginBottom:8}}>{liste.length} note(s) · de la plus récente à la plus vieille · pour en ajouter une, ouvre un PO, une ligne, une commande client ou un fournisseur</div>
     {N.err && <div className="card" style={{color:'var(--danger)',fontSize:13.5,marginBottom:8}}>{N.err}</div>}
     <div className="card" style={{padding:'4px 14px'}}>
       {liste.slice(0,nb).map(n=><NoteItem key={n.id} n={n} contexte/>)}
@@ -754,25 +769,113 @@ function CmdClientsView({cfg, email, toast, refreshKey, onClient}){
 }
 
 // ── Fournisseurs (copie de la Liste maître 2026) ──
-function FournisseursView({cfg, refreshKey}){
+// v9 : la fiche se modifie dans le CRM (minimums, délais, téléphones, notes…), avec des contacts et un fil de notes par fournisseur.
+const FOURN_CHAMPS = ['No client Éclairage','Agence','Lieu','Téléphone principal','Téléphone rep / autre','Courriels','Minimum 2026','Minimum prépayé 2026','Délai de livraison','Note délai','Ramassage','Commande en ligne','Coefficient prix détail (coût ×)','Préfixe code','Note'];
+const CONTACTS_ENTETE = ['id','Fournisseur','Nom','Rôle','Téléphone','Courriel','Note','Actif','Modifié le','Par'];
+function useContacts(cfg, refreshKey){
+  const id = cfg.memoireSpreadsheetId;
+  const [s,setS]=useState({lu:false, err:'', liste:[]});
+  const lire = useCallback(async force=>{
+    if(!id){ setS({lu:true, err:'', liste:[]}); return; }
+    try{ const v = await lireCache(id, "'Contacts fournisseurs'!A1:J", force); setS({lu:true, err:'', liste:rowsToObjects(v.slice(1), CONTACTS_ENTETE).filter(c=>c.id && c.Actif!=='Non')}); }
+    catch(e){ if(ongletAbsent(e)) setS({lu:true, err:'', liste:[]}); else setS(x=>({...x, lu:true, err:apiErrMsg(e)})); }
+  },[id]);
+  useEffect(()=>{ lire(refreshKey>0); },[lire, refreshKey]);
+  const ecrireContact = async (c, par)=>{
+    await ensureSheetsExist(id, [{name:'Contacts fournisseurs', headers:CONTACTS_ENTETE}]);
+    const n = {Actif:'Oui', ...c, 'Modifié le':dateHeure(), Par:par||''};
+    if(c._row) await sheetsUpdateRow(id, "'Contacts fournisseurs'", c._row, objectToRow(n, CONTACTS_ENTETE));
+    else await sheetsAppendRow(id, "'Contacts fournisseurs'", objectToRow({...n, id:genId()}, CONTACTS_ENTETE));
+    await lire(true);
+  };
+  return {...s, ecrireContact};
+}
+function ContactForm({c, fournisseur, onSave, onCancel}){
+  const [f,setF]=useState({Nom:'', Rôle:'', Téléphone:'', Courriel:'', Note:'', ...c, Fournisseur:fournisseur});
+  const [busy,setBusy]=useState(false);
+  const ch = (k, ph, w) => <input value={f[k]||''} placeholder={ph} onChange={e=>setF({...f,[k]:e.target.value})} style={{flex:w||'1 1 150px',width:'auto',minWidth:0,padding:'7px 10px'}}/>;
+  return <div style={{display:'flex',gap:6,flexWrap:'wrap',padding:10,background:'var(--bg3)',borderRadius:9,margin:'6px 0'}}>
+    {ch('Nom','Nom')}{ch('Rôle','Rôle (rep, service client…)')}{ch('Téléphone','Téléphone')}{ch('Courriel','Courriel')}{ch('Note','Note','2 1 220px')}
+    <button className="btn btn-sm btn-p" disabled={busy || !String(f.Nom).trim()} onClick={async()=>{ setBusy(true); await onSave(f); setBusy(false); }}>{busy?'…':'Enregistrer'}</button>
+    <button className="btn btn-sm" onClick={onCancel}>Annuler</button>
+  </div>;
+}
+function ContactsFourn({f, C, email, toast}){
+  const [edit,setEdit]=useState(null); // null | 'nouveau' | id
+  const liste = C.liste.filter(c=>String(c.Fournisseur)===String(f.Fournisseur));
+  const sauver = async c=>{ try{ await C.ecrireContact(c, getNom()||email); toast('Contact enregistré.'); setEdit(null); }catch(e){ toast(apiErrMsg(e),'err'); } };
+  const retirer = async c=>{ if(!window.confirm('Retirer '+c.Nom+' des contacts de '+f.Fournisseur+' ?')) return; await sauver({...c, Actif:'Non'}); };
+  return <div style={{marginTop:10}}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+      <div className="muted" style={{fontSize:11.5,fontWeight:700}}>CONTACTS{liste.length ? ' ('+liste.length+')' : ''}</div>
+      {edit!=='nouveau' && <button className="btn btn-sm" onClick={()=>setEdit('nouveau')}>+ Ajouter un contact</button>}
+    </div>
+    {edit==='nouveau' && <ContactForm fournisseur={f.Fournisseur} onSave={sauver} onCancel={()=>setEdit(null)}/>}
+    {liste.map(c=> edit===c.id ? <ContactForm key={c.id} c={c} fournisseur={f.Fournisseur} onSave={sauver} onCancel={()=>setEdit(null)}/> :
+      <div key={c.id} style={{display:'flex',gap:8,justifyContent:'space-between',flexWrap:'wrap',padding:'6px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+        <div style={{minWidth:0}}><b>{c.Nom}</b>{c.Rôle && <span className="muted"> · {c.Rôle}</span>}
+          <div>{c.Téléphone && <a href={'tel:'+String(c.Téléphone).replace(/[^0-9+]/g,'')} style={{color:'var(--accent)'}}>{c.Téléphone}</a>}{c.Téléphone && c.Courriel ? ' · ' : ''}{c.Courriel && <a href={'mailto:'+c.Courriel} style={{color:'var(--accent)'}}>{c.Courriel}</a>}</div>
+          {c.Note && <div className="muted" style={{fontSize:12}}>{c.Note}</div>}</div>
+        <div style={{display:'flex',gap:6,alignItems:'flex-start'}}><button className="btn btn-sm" onClick={()=>setEdit(c.id)}>Modifier</button><button className="btn btn-sm" onClick={()=>retirer(c)}>Retirer</button></div>
+      </div>)}
+    {!liste.length && edit!=='nouveau' && <div className="muted" style={{fontSize:12.5,padding:'4px 0'}}>Aucun contact ajouté.</div>}
+  </div>;
+}
+function FicheFournForm({f, onSave, onCancel, nouveau}){
+  const [v,setV]=useState(()=>{ const o = {}; ['Fournisseur',...FOURN_CHAMPS].forEach(k=>{ o[k] = (f||{})[k]||''; }); return o; });
+  const [busy,setBusy]=useState(false);
+  return <div style={{padding:10,background:'var(--bg3)',borderRadius:9,marginTop:8}}>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:'0 12px'}}>
+      {(nouveau ? ['Fournisseur',...FOURN_CHAMPS] : FOURN_CHAMPS).map(k=><div className="field" key={k}><label>{k}</label>
+        {k==='Note' || k==='Courriels' ? <textarea rows={2} value={v[k]} onChange={e=>setV({...v,[k]:e.target.value})}/> : <input value={v[k]} onChange={e=>setV({...v,[k]:e.target.value})}/>}</div>)}
+    </div>
+    <div style={{display:'flex',gap:8}}>
+      <button className="btn btn-sm btn-p" disabled={busy || !String(v.Fournisseur).trim()} onClick={async()=>{ setBusy(true); await onSave(v); setBusy(false); }}>{busy?'…':'Enregistrer'}</button>
+      <button className="btn btn-sm" onClick={onCancel}>Annuler</button>
+    </div>
+  </div>;
+}
+function FournisseursView({cfg, email, toast, refreshKey}){
   const M = useMemoire(cfg, refreshKey);
-  const [q,setQ]=useState(''), [ouvert,setOuvert]=useState(null);
+  const C = useContacts(cfg, refreshKey);
+  const [q,setQ]=useState(''), [ouvert,setOuvert]=useState(null), [edit,setEdit]=useState(null);
   const p0 = PasConfigure({M}); if(p0) return <div><h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Fournisseurs</h2>{p0}</div>;
   const norm = s => String(s||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
   const nbPO = f => { const n = norm(f.Fournisseur).slice(0,5); return n ? M.po.filter(p=>norm(p.Fournisseur).includes(n)).length : 0; };
-  const liste = M.fourn.filter(f=>contient(f,q)).sort((a,b)=>a.Fournisseur.localeCompare(b.Fournisseur));
-  const champ = (f,k) => f[k] ? <div style={{fontSize:13,padding:'3px 0'}}><span className="muted">{k} : </span>{/@/.test(f[k]) && k==='Courriels' ? f[k] : f[k]}</div> : null;
+  const contactsDe = f => C.liste.filter(c=>String(c.Fournisseur)===String(f.Fournisseur));
+  const liste = M.fourn.filter(f=>contient([f, contactsDe(f)],q)).sort((a,b)=>a.Fournisseur.localeCompare(b.Fournisseur));
+  const champ = (f,k) => f[k] ? <div style={{fontSize:13,padding:'3px 0',whiteSpace:'pre-wrap'}}><span className="muted">{k} : </span>{f[k]}</div> : null;
+  const par = ()=>getNom() || email;
+  // Chaque changement de la fiche est aussi inscrit au fil de notes du fournisseur (ex. « Minimum 2026 : 500 $ → 750 $ »).
+  const sauver = async (f, v)=>{
+    try{
+      await M.majFourn(f, v);
+      const chg = FOURN_CHAMPS.filter(k=>!memeTexte(f[k], v[k])).map(k=>k+' : '+(String(f[k]||'').trim()||'(vide)')+' → '+(String(v[k]||'').trim()||'(vide)'));
+      if(chg.length) await ajouterNote(cfg.memoireSpreadsheetId, {Fournisseur:f.Fournisseur, Texte:'Fiche modifiée · '+chg.join(' · ')}, par()).catch(()=>{});
+      toast('Fiche de '+f.Fournisseur+' enregistrée.'); setEdit(null);
+    }catch(e){ toast(apiErrMsg(e),'err'); } };
+  const creer = async v=>{
+    if(M.fourn.some(f=>norm(f.Fournisseur)===norm(v.Fournisseur))){ toast('Ce fournisseur existe déjà.','err'); return; }
+    try{ await M.ajouterFourn(v); toast(v.Fournisseur+' ajouté.'); setEdit(null); setOuvert(null); }catch(e){ toast(apiErrMsg(e),'err'); } };
   return <div>
-    <h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Fournisseurs</h2>
-    <Recherche q={q} setQ={setQ} ph="Chercher : nom, agence, préfixe, téléphone…"/>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,flexWrap:'wrap',margin:'0 0 10px'}}>
+      <h2 className="fh" style={{margin:0,fontSize:22}}>Fournisseurs</h2>
+      {edit!=='nouveau' && <button className="btn btn-sm" onClick={()=>setEdit('nouveau')}>+ Nouveau fournisseur</button>}
+    </div>
+    {edit==='nouveau' && <div className="card" style={{marginBottom:10,padding:12}}><div className="fh" style={{fontSize:15}}>Nouveau fournisseur</div><FicheFournForm nouveau onSave={creer} onCancel={()=>setEdit(null)}/></div>}
+    <Recherche q={q} setQ={setQ} ph="Chercher : nom, agence, préfixe, téléphone, contact…"/>
     {!M.fourn.length && <div className="card muted">L'onglet « Fournisseurs » de La mémoire est vide.</div>}
     {liste.map(f=><div key={f._row} className="card" style={{marginBottom:8,padding:12}}>
-      <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',cursor:'pointer'}} onClick={()=>setOuvert(o=>o===f._row?null:f._row)}>
-        <div><div style={{fontWeight:700}}>{f.Fournisseur}</div><div className="muted" style={{fontSize:12.5}}>{[f.Agence && 'Agence '+f.Agence, f['Délai de livraison'], f['Minimum prépayé 2026'] && 'prépayé '+f['Minimum prépayé 2026']].filter(Boolean).join(' · ')}</div></div>
-        <div style={{display:'flex',gap:6,alignItems:'center'}}>{f['Préfixe code'] && <span className="badge" style={{background:'var(--bg3)'}}>{f['Préfixe code']}</span>}<span className="muted" style={{fontSize:12}}>{nbPO(f)} PO</span></div>
+      <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',cursor:'pointer'}} onClick={()=>{ setOuvert(o=>o===f._row?null:f._row); setEdit(null); }}>
+        <div><div style={{fontWeight:700}}>{f.Fournisseur}</div><div className="muted" style={{fontSize:12.5}}>{[f.Agence && 'Agence '+f.Agence, f['Minimum 2026'] && 'min. '+f['Minimum 2026'], f['Délai de livraison'], f['Minimum prépayé 2026'] && 'prépayé '+f['Minimum prépayé 2026']].filter(Boolean).join(' · ')}</div></div>
+        <div style={{display:'flex',gap:6,alignItems:'center'}}>{f['Préfixe code'] && <span className="badge" style={{background:'var(--bg3)'}}>{f['Préfixe code']}</span>}{contactsDe(f).length>0 && <span className="muted" style={{fontSize:12}}>{contactsDe(f).length} contact(s)</span>}<span className="muted" style={{fontSize:12}}>{nbPO(f)} PO</span></div>
       </div>
       {ouvert===f._row && <div style={{marginTop:8,borderTop:'1px solid var(--border)',paddingTop:8}}>
-        {['No client Éclairage','Lieu','Téléphone principal','Téléphone rep / autre','Minimum 2026','Minimum prépayé 2026','Délai de livraison','Note délai','Note','Courriels','Ramassage','Coefficient prix détail (coût ×)'].map(k=><React.Fragment key={k}>{champ(f,k)}</React.Fragment>)}
+        {edit===f._row ? <FicheFournForm f={f} onSave={v=>sauver(f, v)} onCancel={()=>setEdit(null)}/> : <>
+          {FOURN_CHAMPS.filter(k=>k!=='Préfixe code').map(k=><React.Fragment key={k}>{champ(f,k)}</React.Fragment>)}
+          <button className="btn btn-sm" style={{marginTop:6}} onClick={()=>setEdit(f._row)}>✎ Modifier la fiche</button></>}
+        <ContactsFourn f={f} C={C} email={email} toast={toast}/>
+        <NotesFil filtre={n=>String(n.Fournisseur)===String(f.Fournisseur)} cible={{Fournisseur:f.Fournisseur}} titre="NOTES SUR CE FOURNISSEUR"/>
       </div>}
     </div>)}
   </div>;
@@ -1060,7 +1163,7 @@ function App(){
   else if(nav==='cmdclients') ecran = <CmdClientsView cfg={cfg} email={email} toast={toast} refreshKey={refreshKey} onClient={k=>{ setClientChoisi(k); aller('clients'); }}/>;
   else if(nav==='clients') ecran = <ClientsView cfg={cfg} email={email} toast={toast} refreshKey={refreshKey} choisi={clientChoisi} setChoisi={setClientChoisi}/>;
   else if(nav==='produits') ecran = <ProduitsView cfg={cfg} refreshKey={refreshKey}/>;
-  else if(nav==='fournisseurs') ecran = <FournisseursView cfg={cfg} refreshKey={refreshKey}/>;
+  else if(nav==='fournisseurs') ecran = <FournisseursView cfg={cfg} email={email} toast={toast} refreshKey={refreshKey}/>;
   else if(nav==='notes') ecran = <NotesView refreshKey={refreshKey}/>;
   else if(A_VENIR[nav]) ecran = <AVenir id={nav}/>;
   else ecran = <TableauDeBord cfg={cfg} email={email} toast={toast} refreshKey={refreshKey} onNavigate={aller}/>;
