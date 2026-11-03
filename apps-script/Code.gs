@@ -20,6 +20,11 @@
  *                  inscrit les PO (onglets « Commandes fournisseurs » et « Lignes PO »),
  *                  et range les PDF dans La mémoire › Fournisseurs › <fournisseur>.
  *
+ * Version 9.1 — 3 nov. 2026 : (1) chaque ligne n'est jugée que sur SA phrase (le texte après son code s'arrête au
+ *   bout de la ligne) : le courriel SPI du 3 nov. (PO 408072) avait mis en BO le LEDG9 à cause de la phrase
+ *   suivante ; (2) les numéros du fournisseur écrits dans notre description (« STD 70161 ») servent aussi à
+ *   reconnaître la ligne ; (3) Tag avec un NOM seulement (« TAG: DUQUETTE », « tag : Lambert + stock ») :
+ *   relié à la commande en cours de ce client s'il n'y en a qu'une, sinon le nom est inscrit sans numéro.
  * Version 9 — 3 nov. 2026 : STATUTS AUTOMATIQUES (AUTO_STATUTS) — quand un fournisseur écrit, les lignes du PO
  *   avancent toutes seules : avis d'expédition → « Expédié » + date prévue ; BO / ETA → « BO » + date ;
  *   article annulé / discontinué → « Annulé » ; confirmation → « Confirmé » ; prêt à ramasser → « Prêt à ramasser ».
@@ -52,7 +57,7 @@ const DOSSIER_MEMOIRE = '1HE-T772uLZAWsFKQd5MOH5wBaFGDr0KO';   // La mémoire �
 const DEPUIS = '2026/06/01';                                   // début de l'année financière (choisi le 27 oct. 2026)
 const MOI = 'service@eclairagesaran.com';
 const NOM_SHEET = 'La mémoire — Éclairage';
-const LECTEUR = 6;   // version de la lecture des PO : un PO lu avec une version plus vieille est relu une fois
+const LECTEUR = 7;   // version de la lecture des PO : un PO lu avec une version plus vieille est relu une fois
 const AUTO_STATUTS = true;   // v9 : false = le script ne change plus aucun statut (le CRM montre seulement les courriels)
 const PDF_PAR_PASSE = 25;    // v9 : PDF des fournisseurs lus au plus par passe (chaque lecture prend quelques secondes)
 
@@ -192,7 +197,7 @@ function moteurStatuts_(ss) {
     const idx = parPO[po] || [];
     if (!idx.length) return;
     const t = normaliser_(texteBrut);
-    const parLigne = analyserLignes_(t, idx.map(i => vals[i][2]), dateMsg);
+    const parLigne = analyserLignes_(t, idx.map(i => vals[i][2]), dateMsg, idx.map(i => vals[i][3]));
     const mentionnees = parLigne.some(a => a.vu);
     const dateLivraison = datePrevue_(t, dateMsg);
     idx.forEach((i, k) => {
@@ -246,7 +251,7 @@ function moteurStatuts_(ss) {
   return { appliquer, ecrire };
 }
 
-function normaliser_(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' '); }
+function normaliser_(s) { return String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[ \t\u00a0]+/g, ' ').replace(/ *\r?\n[\s]*/g, '\n'); }
 
 // Les façons dont un fournisseur écrit un de nos codes : « EG204922A » → « 204922a », « KUZVL18224-BK-UNV » → « vl18224-bk-unv »…
 function variantesCode_(code) {
@@ -258,10 +263,12 @@ function variantesCode_(code) {
 }
 
 // Pour chaque ligne : le code est-il dans le texte (vu), et que dit le texte juste après LUI (jusqu'au code suivant) ?
-function analyserLignes_(t, codes, dateMsg) {
-  const pos = codes.map(code => {
+function analyserLignes_(t, codes, dateMsg, descs) {
+  const pos = codes.map((code, k) => {
     let best = -1, lg = 0;
-    variantesCode_(code).forEach(v => {
+    // v9.1 : aussi le no du fournisseur écrit dans notre description (« STD 70161 », « STD67093 »)
+    const nos = (String((descs || [])[k] || '').match(/(?:^|[^0-9])(\d{5,6})(?![0-9])/g) || []).map(x => x.replace(/^[^0-9]/, '')).filter(x => !/^20\d\d/.test(x) || x.length > 5);
+    variantesCode_(code).concat(nos).forEach(v => {
       let i = t.indexOf(v);
       while (i >= 0) {
         const avant = i === 0 ? ' ' : t[i - 1], apres = t[i + v.length] || ' ';
@@ -274,7 +281,12 @@ function analyserLignes_(t, codes, dateMsg) {
   return pos.map((p, k) => {
     if (p.i < 0) return { vu: false };
     const prochain = pos.filter((q, j) => j !== k && q.i > p.i).map(q => q.i);
-    const fen = t.slice(p.fin, Math.min(p.fin + 180, prochain.length ? Math.min(...prochain) : Infinity));
+    let fen = t.slice(p.fin, Math.min(p.fin + 180, prochain.length ? Math.min(...prochain) : Infinity));
+    // v9.1 : on s'arrête au bout de SA ligne (ou à « ligne 16 », « line 3 »…) ; si le code est seul sur sa ligne
+    // (tableau de PDF), on prend la ligne suivante.
+    const lignesFen = fen.split('\n');
+    fen = lignesFen[0].replace(/[\s\-–:)(]+/g, '').length < 3 && lignesFen.length > 1 ? lignesFen[0] + ' ' + lignesFen[1] : lignesFen[0];
+    fen = fen.split(/\b(?:ligne|line|item|article)\s*#?\s*\d/)[0];
     const date = dateDansTexte_(fen, dateMsg);
     if (/cancel|annul|discontinu|no longer (available|made|produced|offered)|n.est plus (disponible|fabrique|offert)|obsolete/.test(fen)) return { vu: true, statut: 'Annulé' };
     const motBO = /back ?order(?:ed)?|\bb\/o\b|rupture|en souffrance|not (?:yet )?(?:available|in stock)|pas (?:encore )?(?:disponible|en stock)|out of stock|\beta\b|delay|retard/;
@@ -412,6 +424,13 @@ function poEnvoyes_(debut) {
       inscrits[c.po] = { version: c.version, ligne: shPO.getLastRow(), lecteur: LECTEUR };
       stats.inscrits++;
     }
+    // v9.1 : Tag avec un nom seulement → la commande en cours de ce client, s'il n'y en a qu'une.
+    lu.lignes.filter(l => l.tagNom && !l.cmdClient).forEach(l => {
+      const t = relierParNom_(shL, l.tagNom);
+      if (t) { l.cmdClient = t.cmd; l.client = t.client; l.note = ('Tag « ' + l.tagNom + ' » relié à la commande ' + t.cmd + (l.note ? ' — ' + l.note : '')).slice(0, 150); }
+      else { l.client = l.tagNom; l.note = ('Tag « ' + l.tagNom + ' » sans no de commande' + (l.note ? ' — ' + l.note : '')).slice(0, 150); }
+      Logger.log('      Tag par nom « ' + l.tagNom + ' » (' + l.produit + ') → ' + (t ? 'commande ' + t.cmd + ' ' + t.client : 'aucune commande unique : nom inscrit seul'));
+    });
     const lignes = lu.lignes.map(l => {
       const g = suivi[l.no + '|' + l.produit];
       return [c.po, l.no, l.produit, l.desc, l.qte, l.unite, l.sansPrix ? '' : l.montant.toFixed(2), l.cmdClient, l.client, l.requisition,
@@ -526,6 +545,12 @@ function lirePO_(texte) {
     if (!l.cmdClient) {
       const t2 = (l.desc + ' ' + l.note).match(/TAG\s*:?\s*([^\d:]{3,80}?)[\s\-–]*\b(\d{6})\b/i);
       if (t2 && !/^\s*(stock|stk|showroom)\b/i.test(t2[1])) { l.cmdClient = t2[2]; l.client = t2[1].replace(/[\s\-–]+$/, '').trim().slice(0, 80); }
+      // v9.1 : Tag avec un NOM seulement (« TAG: DUQUETTE », « tag : Lambert + stock ») : on garde le nom ; poEnvoyes_ cherche la commande.
+      else if (!t2) {
+        const t3 = (l.desc + ' ' + l.note).match(/TAG\s*:\s*([A-Za-zÀ-ÿ'&.\- ]{3,60})/i);
+        const nom = t3 ? t3[1].replace(/\+.*$/, '').replace(/\b(stock|stk|showroom|per|par)\b.*$/i, '').replace(/[\s\-–.]+$/, '').trim() : '';
+        if (nom.length >= 3) l.tagNom = nom;
+      }
     }
     const orig = (l.desc + ' ' + l.note).match(/PO\s?#?\s?(\d{6})\b/i);           // retour : le PO d'origine
     if (orig) l.note = ('PO d\'origine ' + orig[1] + (l.note ? ' — ' + l.note : '')).slice(0, 150);
@@ -553,6 +578,26 @@ function lirePO_(texte) {
   if (somme < 0) { st = -st; total = -total; }
 
   return { type, fournisseur, dateRequise, lignes, st, total };
+}
+
+// v9.1 : les commandes clients en cours dont le nom contient ce nom (mot entier). Une seule → on la prend.
+let INDEX_CLIENTS_ = null;
+function relierParNom_(shL, nom) {
+  if (!shL) return null;
+  if (!INDEX_CLIENTS_) {
+    INDEX_CLIENTS_ = {};
+    if (shL.getLastRow() > 1) shL.getRange(2, 1, shL.getLastRow() - 1, 11).getDisplayValues().forEach(r => {
+      const cmd = r[7], client = r[8], statut = r[10] || 'Commandé';
+      if (!cmd || !client || /stock|showroom|\bstk\b/i.test(client)) return;
+      const c = INDEX_CLIENTS_[cmd] || (INDEX_CLIENTS_[cmd] = { client, ouvert: false });
+      if (!/^(Reçu|Livré|Annulé)/.test(statut)) c.ouvert = true;
+    });
+  }
+  const n = normaliser_(nom).replace(/[^a-z0-9& ]/g, ' ').trim();
+  if (n.length < 3) return null;
+  const re = new RegExp('(^|[^a-z0-9])' + n.replace(/\s+/g, '[^a-z0-9]+') + '($|[^a-z0-9])');
+  const trouve = Object.keys(INDEX_CLIENTS_).filter(cmd => INDEX_CLIENTS_[cmd].ouvert && re.test(normaliser_(INDEX_CLIENTS_[cmd].client)));
+  return trouve.length === 1 ? { cmd: trouve[0], client: INDEX_CLIENTS_[trouve[0]].client } : null;
 }
 
 // ───────────────────────── Outils ─────────────────────────
