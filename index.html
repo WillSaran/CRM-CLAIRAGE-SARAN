@@ -75,7 +75,7 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
 <body>
 <div id="root"></div>
 <script type="text/babel" data-presets="react">
-const {useState,useEffect,useCallback} = React;
+const {useState,useEffect,useCallback,useContext} = React;
 
 // ── CONFIGURATION ─────────────────────────────────────────────────────────
 // Le dépôt GitHub est PUBLIC : aucun identifiant, aucun ID de Sheet ici.
@@ -84,7 +84,9 @@ const {useState,useEffect,useCallback} = React;
 //   apiKey              : facultatif
 //   memoireSpreadsheetId: Google Sheet « La mémoire — Éclairage » (onglets créés par le CRM au besoin)
 //   gmailLibelles       : libellés Gmail à afficher dans Courriel, séparés par des virgules
-const APP_VERSION = 'v7';
+const APP_VERSION = 'v8';
+// v8 : fil de notes (onglet « Notes » de La mémoire : date + qui, jamais effacé, du plus récent au plus vieux)
+//      et connexion gardée sur l'appareil (plus besoin de tout refaire en rouvrant l'onglet).
 // v2 : l'ID client est public (Google l'envoie à chaque visiteur) : il est mis ici pour ne plus avoir à le coller.
 const CLIENT_ID_ECLAIRAGE = '788746263116-innh7g6ogpeln3mdn4mosan1q3h25i8h.apps.googleusercontent.com';
 const DEFAULT_CFG = {clientId:CLIENT_ID_ECLAIRAGE, apiKey:'', memoireSpreadsheetId:'', gmailLibelles:''};
@@ -144,16 +146,22 @@ function requestToken(prompt, extra){
       if(resp && resp.access_token){
         tokenExpire = Date.now() + (Number(resp.expires_in)||3600)*1000;
         if(resp.scope) tokenScopes = resp.scope;
-        try{ sessionStorage.setItem('ems_tok', JSON.stringify({t:resp.access_token, e:tokenExpire, s:tokenScopes})); }catch(e){}
+        // v8 : gardé dans localStorage (et non sessionStorage) pour survivre à la fermeture de l'onglet.
+        try{ localStorage.setItem('ems_tok', JSON.stringify({t:resp.access_token, e:tokenExpire, s:tokenScopes})); }catch(e){}
         resolve(resp);
       } else reject(resp);
     };
     tokenClient.error_callback = e=>reject(e);
-    tokenClient.requestAccessToken({prompt: prompt!==undefined ? prompt : (window.gapi.client.getToken() ? '' : 'consent'), include_granted_scopes:true, ...(extra ? {scope:SCOPES+' '+extra} : {})});
+    const deja = window.gapi.client.getToken() || emailConnu();
+    const hint = emailConnu();
+    tokenClient.requestAccessToken({prompt: prompt!==undefined ? prompt : (deja ? '' : 'consent'), include_granted_scopes:true, ...(hint && prompt!=='select_account' ? {login_hint:hint} : {}), ...(extra ? {scope:SCOPES+' '+extra} : {})});
   });
 }
+// Le compte déjà utilisé sur cet appareil : sert à reconnecter en un clic, sans choisir le compte ni réaccepter.
+function emailConnu(){ try{ return localStorage.getItem('ems_email')||''; }catch(e){ return ''; } }
+function oublierConnexion(){ try{ localStorage.removeItem('ems_tok'); localStorage.removeItem('ems_email'); sessionStorage.removeItem('ems_tok'); }catch(e){} }
 function restoreToken(){
-  try{ const o = JSON.parse(sessionStorage.getItem('ems_tok')||'null');
+  try{ const o = JSON.parse(localStorage.getItem('ems_tok') || sessionStorage.getItem('ems_tok') || 'null');
     if(o && o.t && o.e > Date.now()+60000){ window.gapi.client.setToken({access_token:o.t}); tokenExpire=o.e; tokenScopes=o.s||''; return true; } }catch(e){}
   return false;
 }
@@ -455,6 +463,109 @@ function useMemoire(cfg, refreshKey){
   return {...d, configure:!!id, majLigne, majLignes, relire:()=>lire(true)};
 }
 
+// ── Notes (onglet « Notes » de La mémoire) ────────────────────────────────
+// Remplace les notes écrites sur les bons papier : chaque note garde sa date et qui l'a écrite,
+// rien n'est jamais effacé, et on les lit du plus récent au plus vieux.
+// Une note peut viser une ligne de PO, un PO au complet ou une commande client.
+const NOTES_ENTETE = ['id','Date','Par','PO','Ligne','Produit','Commande client','Client','Texte'];
+const NOMS_EQUIPE = ['Bianca','Linda','Nancy','Marie-Jade','Mark','Marie'];
+const NotesCtx = React.createContext(null);
+function getNom(){ try{ return localStorage.getItem('ems_nom')||''; }catch(e){ return ''; } }
+function useNom(){
+  const [nom,setN]=useState(getNom);
+  useEffect(()=>{ const f=()=>setN(getNom()); window.addEventListener('ems-nom',f); return ()=>window.removeEventListener('ems-nom',f); },[]);
+  const set = n=>{ try{ localStorage.setItem('ems_nom', n); }catch(e){} setN(n); window.dispatchEvent(new Event('ems-nom')); };
+  return [nom,set];
+}
+function dateHeure(d){ const x = d || new Date(), p = n=>String(n).padStart(2,'0'); return localDateStr(x)+' '+p(x.getHours())+':'+p(x.getMinutes())+':'+p(x.getSeconds()); }
+function fmtNoteDate(s){ const t = String(s||''); return fmtJour(t)+(t.length>11 ? ' · '+t.slice(11,16) : ''); }
+const memeTexte = (a,b) => String(a||'').trim()===String(b||'').trim();
+let NOTES_PRET = '';
+async function ajouterNote(id, champs, par){
+  if(NOTES_PRET!==id){ await ensureSheetsExist(id, [{name:'Notes', headers:NOTES_ENTETE}]); NOTES_PRET = id; }
+  const n = {id:genId(), Date:dateHeure(), Par:par||'', ...champs};
+  await sheetsAppendRow(id, 'Notes', objectToRow(n, NOTES_ENTETE));
+  window.dispatchEvent(new Event('ems-notes'));
+  return n;
+}
+function useNotes(cfg, refreshKey, actif){
+  const id = cfg.memoireSpreadsheetId;
+  const [s,setS]=useState({lu:false, err:'', liste:[]});
+  const lire = useCallback(async force=>{
+    if(!actif) return;
+    if(!id){ setS({lu:true, err:'', liste:[]}); return; }
+    try{ const v = await lireCache(id, 'Notes!A1:I', force);
+      setS({lu:true, err:'', liste:rowsToObjects(v.slice(1), NOTES_ENTETE).filter(n=>n.id && String(n.Texte).trim()).sort((a,b)=>String(b.Date).localeCompare(String(a.Date)) || b._row-a._row)}); }
+    catch(e){ if(ongletAbsent(e)) setS({lu:true, err:'', liste:[]}); else setS(x=>({...x, lu:true, err:apiErrMsg(e)})); }
+  },[id, actif]);
+  useEffect(()=>{ lire(refreshKey>0); },[lire, refreshKey]);
+  useEffect(()=>{ const f=()=>lire(true); window.addEventListener('ems-notes', f); return ()=>window.removeEventListener('ems-notes', f); },[lire]);
+  return {...s, configure:!!id, relire:()=>lire(true)};
+}
+function ChoixNom({nom, setNom}){
+  const [autre,setAutre]=useState(false), [t,setT]=useState('');
+  return <div style={{fontSize:12.5,padding:'6px 0'}}>
+    <div className="muted" style={{marginBottom:5}}>Qui écrit les notes sur cet appareil ? (on le demande une seule fois)</div>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+      {NOMS_EQUIPE.map(n=><button key={n} className={'btn btn-sm'+(nom===n?' btn-p':'')} onClick={()=>setNom(n)}>{n}</button>)}
+      {!autre ? <button className="btn btn-sm" onClick={()=>setAutre(true)}>Autre…</button> : <>
+        <input value={t} autoFocus onChange={e=>setT(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter' && t.trim()) setNom(t.trim()); }} placeholder="Prénom" style={{width:130,padding:'6px 9px'}}/>
+        <button className="btn btn-sm btn-p" disabled={!t.trim()} onClick={()=>setNom(t.trim())}>OK</button></>}
+    </div>
+  </div>;
+}
+function NoteItem({n, contexte}){
+  const ctx = [n.PO && 'PO '+n.PO, n.Produit, n.Client && nomClient(n.Client), !n.PO && n['Commande client'] && 'cmd '+n['Commande client']].filter(Boolean).join(' · ');
+  return <div style={{padding:'7px 0',borderBottom:'1px solid var(--border)',fontSize:13}}>
+    <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'baseline'}}><b>{fmtNoteDate(n.Date)}</b><span style={{color:'var(--accent)',fontWeight:700}}>{n.Par || '—'}</span>{contexte && ctx && <span className="muted" style={{fontSize:12}}>· {ctx}</span>}</div>
+    <div style={{whiteSpace:'pre-wrap',marginTop:2}}>{n.Texte}</div>
+  </div>;
+}
+// Le fil de notes d'une ligne, d'un PO ou d'une commande client, avec la case pour en ajouter une.
+function NotesFil({filtre, cible, titre, contexte, max}){
+  const {N, cfg, toast} = useContext(NotesCtx) || {};
+  const [nom,setNom]=useNom();
+  const [txt,setTxt]=useState(''), [busy,setBusy]=useState(false), [tout,setTout]=useState(false), [changer,setChanger]=useState(false);
+  if(!N || !N.configure) return null;
+  const liste = N.liste.filter(filtre);
+  const lim = max||5, montrees = tout ? liste : liste.slice(0, lim);
+  const ajouter = async ()=>{ const t = txt.trim(); if(!t || !nom || busy) return; setBusy(true);
+    try{ await ajouterNote(cfg.memoireSpreadsheetId, {...cible, Texte:t}, nom); setTxt(''); toast('Note ajoutée.'); }catch(e){ toast(apiErrMsg(e),'err'); }
+    setBusy(false); };
+  return <div style={{marginTop:10}} onClick={e=>e.stopPropagation()}>
+    <div className="muted" style={{fontSize:11.5,fontWeight:700,marginBottom:4}}>{titre||'NOTES'}{liste.length ? ' ('+liste.length+')' : ''}</div>
+    {(!nom || changer) ? <ChoixNom nom={nom} setNom={n=>{ setNom(n); setChanger(false); }}/> :
+      <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center',marginBottom:2}}>
+        <input value={txt} onChange={e=>setTxt(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter') ajouter(); }} placeholder="Ajouter une note… (ex. message laissé au client)" style={{flex:'1 1 220px',width:'auto',minWidth:0,padding:'7px 10px'}}/>
+        <button className="btn btn-sm btn-p" disabled={busy||!txt.trim()} onClick={ajouter}>{busy?'…':'Ajouter'}</button>
+        <button className="btn btn-sm" title="Changer de nom" onClick={()=>setChanger(true)}>{nom} ✎</button>
+      </div>}
+    {montrees.map(n=><NoteItem key={n.id} n={n} contexte={contexte}/>)}
+    {liste.length>lim && <button className="btn btn-sm" style={{marginTop:6}} onClick={()=>setTout(t=>!t)}>{tout ? 'Moins' : 'Voir les '+liste.length+' notes'}</button>}
+  </div>;
+}
+const noteDeLigne = l => n => String(n.PO)===String(l.PO) && String(n.Ligne)===String(l.Ligne) && String(n.Produit)===String(l.Produit);
+const cibleLigne = l => ({PO:l.PO, Ligne:l.Ligne, Produit:l.Produit, 'Commande client':l['Commande client'], Client:l.Client});
+// Toutes les notes qui touchent une commande client (sur la commande elle-même ou sur une de ses lignes de PO).
+const noteDeCommande = (no, ls) => n => String(n['Commande client'])===String(no) || ls.some(l=>noteDeLigne(l)(n));
+function NotesView({refreshKey}){
+  const {N} = useContext(NotesCtx) || {};
+  const [q,setQ]=useState(''), [nb,setNb]=useState(60);
+  if(!N || !N.configure) return <div><h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Notes</h2><div className="card muted">Indique l'ID du Sheet « La mémoire — Éclairage » dans Réglages.</div></div>;
+  const liste = N.liste.filter(n=>contient([n.Texte,n.Par,n.PO,n.Produit,n.Client,n['Commande client']], q));
+  return <div>
+    <h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Notes</h2>
+    <Recherche q={q} setQ={setQ} ph="Chercher : client, PO, produit, qui, texte…"/>
+    <div className="muted" style={{fontSize:12.5,marginBottom:8}}>{liste.length} note(s) · de la plus récente à la plus vieille · pour en ajouter une, ouvre un PO, une ligne ou une commande client</div>
+    {N.err && <div className="card" style={{color:'var(--danger)',fontSize:13.5,marginBottom:8}}>{N.err}</div>}
+    <div className="card" style={{padding:'4px 14px'}}>
+      {liste.slice(0,nb).map(n=><NoteItem key={n.id} n={n} contexte/>)}
+      {N.lu && !liste.length && <div className="muted" style={{padding:'10px 0',fontSize:13}}>{q ? 'Rien trouvé.' : 'Aucune note pour l\'instant.'}</div>}
+    </div>
+    {liste.length>nb && <button className="btn" style={{marginTop:8}} onClick={()=>setNb(n=>n+60)}>Afficher plus</button>}
+  </div>;
+}
+
 function MessagesFourn({msgs, max}){
   const [tout,setTout]=useState(false);
   if(!msgs || !msgs.length) return <div className="muted" style={{fontSize:12.5,padding:'4px 0'}}>Aucun courriel du fournisseur relié à ce PO pour l'instant.</div>;
@@ -483,14 +594,29 @@ function LigneSuivi({l, M, email, toast, montrerPO, montrerClient}){
   const [busy,setBusy]=useState(false);
   const auj = todayISO(), requis = l._po['Date requise']||'';
   const enRetard = !FERME(l._statut) && ((l['Date prévue'] && l['Date prévue']<auj) || (!l['Date prévue'] && requis && requis<auj && /Commandé|Confirmé/.test(l._statut)));
-  const sauver = async ()=>{ setBusy(true); try{ await M.majLigne(l, f, email); toast('Ligne mise à jour.'); setOuvert(false); }catch(e){ toast(apiErrMsg(e),'err'); } setBusy(false); };
+  const {N, cfg} = useContext(NotesCtx) || {};
+  const derniere = N ? N.liste.find(noteDeLigne(l)) : null;
+  const sauver = async ()=>{ setBusy(true);
+    try{
+      const par = getNom() || email;
+      await M.majLigne(l, f, par);
+      // v8 : chaque changement est aussi inscrit dans le fil de notes, pour garder l'historique (la note de suivi, elle, se remplace).
+      const morceaux = [];
+      if(f.Statut!==l._statut) morceaux.push('Statut → '+f.Statut);
+      if(!memeTexte(f['Date prévue'], l['Date prévue']) && f['Date prévue']) morceaux.push('prévu le '+fmtJour(f['Date prévue']));
+      if(!memeTexte(f['Note suivi'], l['Note suivi']) && String(f['Note suivi']).trim()) morceaux.push(String(f['Note suivi']).trim());
+      if(morceaux.length && cfg && cfg.memoireSpreadsheetId) await ajouterNote(cfg.memoireSpreadsheetId, {...cibleLigne(l), Texte:morceaux.join(' · ')}, par).catch(()=>{});
+      toast('Ligne mise à jour.'); setOuvert(false);
+    }catch(e){ toast(apiErrMsg(e),'err'); }
+    setBusy(false); };
   return <div style={{padding:'9px 0',borderBottom:'1px solid var(--border)'}}>
     <div style={{display:'flex',gap:8,alignItems:'flex-start',flexWrap:'wrap',cursor:'pointer'}} onClick={()=>setOuvert(o=>!o)}>
       <div style={{flex:'1 1 240px',minWidth:0}}>
         <div style={{fontSize:13.5,fontWeight:600}}>{l.Qté} × {l.Produit} {montrerPO && <span className="muted" style={{fontWeight:400}}>· PO {l.PO} · {l._fourn}</span>}</div>
         <div className="muted" style={{fontSize:12.5,overflow:'hidden',textOverflow:'ellipsis'}}>{l.Description}</div>
         {montrerClient && <div style={{fontSize:12.5,marginTop:2}}>{l['Commande client'] ? (estStock(l.Client) ? '📦 Stock / showroom' : '👤 '+l.Client+' · cmd '+l['Commande client']) : <span className="muted">Aucun client (stock ?)</span>}</div>}
-        {(l.Note || l['Note suivi']) && <div className="muted" style={{fontSize:12,marginTop:2}}>{l['Note suivi'] ? '✎ '+l['Note suivi'] : ''}{l['Note suivi'] && l.Note ? ' · ' : ''}{l.Note ? 'PO : '+l.Note : ''}</div>}
+        {derniere ? <div style={{fontSize:12,marginTop:2}}>🗒 <b>{fmtNoteDate(derniere.Date)}</b> <span style={{color:'var(--accent)',fontWeight:700}}>{derniere.Par}</span> : {derniere.Texte}{l.Note ? <span className="muted"> · PO : {l.Note}</span> : null}</div>
+          : (l.Note || l['Note suivi']) && <div className="muted" style={{fontSize:12,marginTop:2}}>{l['Note suivi'] ? '✎ '+l['Note suivi'] : ''}{l['Note suivi'] && l.Note ? ' · ' : ''}{l.Note ? 'PO : '+l.Note : ''}</div>}
       </div>
       <div style={{display:'flex',gap:6,alignItems:'center',flexShrink:0}}>
         {l['Date prévue'] && <span style={{fontSize:12,color:enRetard?'var(--danger)':'var(--muted)'}}>prévu {fmtJour(l['Date prévue'])}</span>}
@@ -507,6 +633,7 @@ function LigneSuivi({l, M, email, toast, montrerPO, montrerClient}){
         <input value={f['Note suivi']} placeholder="ex. confirmé par Sophie au tél." onChange={e=>setF({...f,'Note suivi':e.target.value})}/></div>
       <button className="btn btn-sm btn-p" disabled={busy} onClick={sauver}>{busy?'…':'Enregistrer'}</button>
       {l['Modifié le'] && <div className="muted" style={{fontSize:11,width:'100%'}}>Modifié le {l['Modifié le']}{l.Par ? ' par '+l.Par : ''}</div>}
+      <div style={{width:'100%'}}><NotesFil filtre={noteDeLigne(l)} cible={cibleLigne(l)} titre="NOTES SUR CETTE LIGNE"/></div>
     </div>}
   </div>;
 }
@@ -518,7 +645,7 @@ function AppliquerSuggestion({p, M, email, toast}){
   const cible = x.Type==='Expédition' ? 'Expédié' : x.Type==='Prêt à ramasser' ? 'Prêt à ramasser' : x.Type==='Confirmation' ? 'Confirmé' : null; if(!cible) return null;
   const ls = p._ls.filter(l=> cible==='Confirmé' ? l._statut==='Commandé' : cible==='Expédié' ? /^(Commandé|Confirmé|BO)$/.test(l._statut) : /^(Commandé|Confirmé|BO|Expédié)$/.test(l._statut));
   if(!ls.length) return null;
-  const go = async ()=>{ setBusy(true); try{ await M.majLignes(ls, {Statut:cible, 'Note suivi':'d\'après le courriel du '+x.Date+' ('+x.De+')'}, email); toast(ls.length+' ligne(s) → '+cible); }catch(e){ toast(apiErrMsg(e),'err'); } setBusy(false); };
+  const go = async ()=>{ setBusy(true); try{ await M.majLignes(ls, {Statut:cible, 'Note suivi':'d\'après le courriel du '+x.Date+' ('+x.De+')'}, getNom() || email); toast(ls.length+' ligne(s) → '+cible); }catch(e){ toast(apiErrMsg(e),'err'); } setBusy(false); };
   return <button className="btn btn-sm" style={{marginTop:8}} disabled={busy} onClick={go}>{busy?'…':'Mettre les '+ls.length+' ligne(s) ouvertes à « '+cible+' » (courriel du '+fmtJour(x.Date)+')'}</button>;
 }
 
@@ -577,6 +704,7 @@ function CmdFournView({cfg, email, toast, refreshKey}){
         <AppliquerSuggestion p={p} M={M} email={email} toast={toast}/>
         <div style={{margin:'10px 0 0'}} className="fh">Lignes</div>
         {p._ls.map(l=><LigneSuivi key={l._row} l={l} M={M} email={email} toast={toast} montrerClient/>)}
+        <NotesFil filtre={n=>String(n.PO)===String(p.PO)} cible={{PO:p.PO}} titre="NOTES SUR CE PO (TOUTES LES LIGNES)" contexte/>
       </div>}
     </div>)}
     {liste.length>nb && <button className="btn" onClick={()=>setNb(n=>n+40)}>Afficher plus</button>}
@@ -617,7 +745,8 @@ function CmdClientsView({cfg, email, toast, refreshKey, onClient}){
       </div>
       {ouvert===c.no && <div style={{marginTop:8}}>
         <button className="btn btn-sm" style={{marginBottom:4}} onClick={()=>onClient(cleClient(c.client))}>👤 Fiche de {nomClient(c.client)}</button>
-        {c.lignes.map(l=><LigneSuivi key={l._row} l={l} M={M} email={email} toast={toast} montrerPO/>)}</div>}
+        {c.lignes.map(l=><LigneSuivi key={l._row} l={l} M={M} email={email} toast={toast} montrerPO/>)}
+        <NotesFil filtre={noteDeCommande(c.no, c.lignes)} cible={{'Commande client':c.no, Client:c.client}} titre={'NOTES SUR LA COMMANDE '+c.no} contexte/></div>}
     </div>)}
     {liste.length>nb && <button className="btn" onClick={()=>setNb(n=>n+40)}>Afficher plus</button>}
     {!liste.length && <div className="card muted">Aucune commande pour ce filtre.</div>}
@@ -685,6 +814,7 @@ function FicheClient({c, M, email, toast, onRetour}){
     {cmds.map(x=><div key={x.no} className="card" style={{marginBottom:8,padding:12}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}><b>Commande {x.no}</b><span className="muted" style={{fontSize:12.5}}>{fmtJour(x.date)} · {x.ouv ? x.ouv+' à recevoir' : 'tout reçu'}</span></div>
       {x.ls.map(l=><LigneSuivi key={l._row} l={l} M={M} email={email} toast={toast} montrerPO/>)}
+      <NotesFil filtre={noteDeCommande(x.no, x.ls)} cible={{'Commande client':x.no, Client:c.nom}} titre={'NOTES SUR LA COMMANDE '+x.no} contexte max={3}/>
       {(()=>{ const ms = [...new Set(x.ls.map(l=>l.PO))].flatMap(po=>M.msgsPar[po]||[]).sort((a,b)=>String(b.Date).localeCompare(String(a.Date)));
         return ms.length ? <div style={{marginTop:8}}><div className="muted" style={{fontSize:11.5,fontWeight:700}}>CE QUE LES FOURNISSEURS ONT DIT</div><MessagesFourn msgs={ms} max={2}/></div> : null; })()}
     </div>)}
@@ -804,8 +934,20 @@ function TableauDeBord({cfg, email, toast, refreshKey, onNavigate}){
             {x['ETA (texte)'] && <div style={{fontWeight:700}}>« {x['ETA (texte)']} »</div>}
             <div className="muted">{cl.length ? '👤 '+cl.slice(0,3).join(', ') : 'Stock'}</div></div>; })}
       </div>}
+      <DernieresNotes onNavigate={onNavigate}/>
       <div className="card" style={{marginBottom:14}}><div className="fh" style={{fontSize:15,marginBottom:8}}>Rappels</div><RappelsListe cfg={cfg} toast={toast} refreshKey={refreshKey} compact/></div>
     </div>
+  </div>;
+}
+
+function DernieresNotes({onNavigate}){
+  const {N} = useContext(NotesCtx) || {};
+  if(!N || !N.configure || !N.lu) return null;
+  return <div className="card" style={{marginBottom:14}}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline'}}><div className="fh" style={{fontSize:15,marginBottom:4}}>Dernières notes</div>
+      <a href="#" style={{fontSize:12.5,color:'var(--accent)'}} onClick={e=>{ e.preventDefault(); onNavigate('notes'); }}>Toutes les notes →</a></div>
+    {N.liste.slice(0,8).map(n=><NoteItem key={n.id} n={n} contexte/>)}
+    {!N.liste.length && <div className="muted" style={{fontSize:13}}>Aucune note encore. Ouvre une ligne de PO ou une commande client pour en écrire une.</div>}
   </div>;
 }
 
@@ -852,7 +994,7 @@ function SettingsView({cfg, onSave, avantConnexion, email, onDeconnexion}){
 
 // ── Application ───────────────────────────────────────────────────────────
 const NAV = [
-  ['dashboard','Tableau de bord'],['clients','Clients'],['cmdclients','Commandes clients'],['cmdfourn','Commandes fournisseurs'],
+  ['dashboard','Tableau de bord'],['clients','Clients'],['cmdclients','Commandes clients'],['cmdfourn','Commandes fournisseurs'],['notes','Notes'],
   ['fournisseurs','Fournisseurs'],['produits','Produits'],['courriel','Courriel'],['rappels','Rappels'],['reglages','Réglages']
 ];
 function App(){
@@ -868,6 +1010,7 @@ function App(){
   const [toast,toastNode]=useToast();
   const isDesktop = useIsDesktop();
   useTheme();
+  const N = useNotes(cfg, refreshKey, etat==='ok');
 
   useEffect(()=>{
     if(!cfg.clientId){ setEtat('config'); return; }
@@ -875,7 +1018,7 @@ function App(){
   },[]);
   useEffect(()=>{
     if(etat!=='ok') return;
-    window.gapi.client.request({path:'https://www.googleapis.com/oauth2/v3/userinfo'}).then(r=>setEmail((r.result||{}).email||'')).catch(()=>{});
+    window.gapi.client.request({path:'https://www.googleapis.com/oauth2/v3/userinfo'}).then(r=>{ const e = (r.result||{}).email||''; setEmail(e); if(e){ try{ localStorage.setItem('ems_email', e); }catch(x){} } }).catch(()=>{});
     const verifier = ()=>{ if(tokenExpired()) setExpire(true); };
     const exp = ()=>setExpire(true), neuf = ()=>setExpire(false);
     window.addEventListener('ems-jeton-expire', exp); window.addEventListener('ems-jeton', neuf);
@@ -886,19 +1029,27 @@ function App(){
   const sauverReglages = c=>{
     const changeClient = c.clientId!==cfg.clientId;
     saveCfg(c); setCfg(c);
-    if(changeClient){ try{ sessionStorage.removeItem('ems_tok'); }catch(e){} window.location.reload(); return; }
+    if(changeClient){ oublierConnexion(); window.location.reload(); return; }
     viderCache(); setRefreshKey(k=>k+1); toast('Réglages enregistrés.');
   };
-  const connecter = async ()=>{ try{ await requestToken(); setExpire(false); setEtat('ok'); }catch(e){ toast('Connexion refusée ou annulée.','err'); } };
+  const connecter = async autreCompte=>{ try{ if(autreCompte===true) oublierConnexion(); await requestToken(autreCompte===true ? 'select_account' : undefined); setExpire(false); setEtat('ok'); }catch(e){ toast('Connexion refusée ou annulée.','err'); } };
   const reconnecter = async ()=>{ try{ await requestToken(''); setExpire(false); viderCache(); setRefreshKey(k=>k+1); toast('Reconnecté.'); }catch(e){ toast('Reconnexion annulée.','err'); } };
-  const deconnecter = ()=>{ try{ const t = window.gapi.client.getToken(); if(t) window.google.accounts.oauth2.revoke(t.access_token, ()=>{}); window.gapi.client.setToken(null); sessionStorage.removeItem('ems_tok'); }catch(e){} tokenExpire=0; tokenScopes=''; setEmail(''); setEtat('login'); };
+  const deconnecter = ()=>{ try{ const t = window.gapi.client.getToken(); if(t) window.google.accounts.oauth2.revoke(t.access_token, ()=>{}); window.gapi.client.setToken(null); }catch(e){} oublierConnexion(); tokenExpire=0; tokenScopes=''; setEmail(''); setEtat('login'); };
   const aller = id=>{ setNav(id); setMenu(false); try{ sessionStorage.setItem('ems_nav', id); }catch(e){} window.scrollTo(0,0); };
 
   const Logo = () => <div className="logo"><img src="logo-eclairage.png" alt="Éclairage Moderne Saran"/><span className="muted" style={{fontWeight:400,fontSize:11.5,fontFamily:'var(--font-body)'}}>{APP_VERSION}</span></div>;
   if(etat==='init') return <div className="login-screen"><div className="spin"></div></div>;
   if(etat==='config') return <div className="login-screen"><Logo/><div className="muted" style={{maxWidth:420,textAlign:'center',fontSize:13.5}}>Première fois sur cet appareil : colle l'ID client Google (Google Cloud › Clients).</div><div style={{width:'100%',maxWidth:560}}><SettingsView cfg={cfg} onSave={sauverReglages} avantConnexion/></div>{toastNode}</div>;
   if(etat==='erreur') return <div className="login-screen"><Logo/><div className="card" style={{maxWidth:480,color:'var(--danger)',fontSize:13.5}}>Impossible de démarrer la connexion Google : {err}</div><button className="btn" onClick={()=>setEtat('config')}>Vérifier l'ID client</button></div>;
-  if(etat==='login') return <div className="login-screen"><Logo/><div className="muted">Commandes, fournisseurs, BO et relances des clients.</div><button className="btn btn-p" onClick={connecter}>Se connecter avec Google</button><button className="btn btn-sm" onClick={()=>setEtat('config')}>Réglages</button>{toastNode}</div>;
+  if(etat==='login'){ const connu = emailConnu();
+    // Google limite chaque connexion à 1 h. Si le compte est déjà connu sur cet appareil, un seul clic suffit (pas de choix de compte, rien à réaccepter).
+    return <div className="login-screen"><Logo/><div className="muted">Commandes, fournisseurs, BO et relances des clients.</div>
+      {connu ? <>
+        <button className="btn btn-p" onClick={()=>connecter()}>Continuer — {connu}</button>
+        <div className="muted" style={{fontSize:12,maxWidth:380,textAlign:'center'}}>Google demande de confirmer la connexion après 1 h sans utiliser le CRM. Un clic suffit.</div>
+        <button className="btn btn-sm" onClick={()=>connecter(true)}>Utiliser un autre compte</button></>
+      : <button className="btn btn-p" onClick={()=>connecter()}>Se connecter avec Google</button>}
+      <button className="btn btn-sm" onClick={()=>setEtat('config')}>Réglages</button>{toastNode}</div>; }
 
   let ecran;
   if(nav==='dashboard') ecran = <TableauDeBord cfg={cfg} email={email} toast={toast} refreshKey={refreshKey} onNavigate={aller}/>;
@@ -910,10 +1061,11 @@ function App(){
   else if(nav==='clients') ecran = <ClientsView cfg={cfg} email={email} toast={toast} refreshKey={refreshKey} choisi={clientChoisi} setChoisi={setClientChoisi}/>;
   else if(nav==='produits') ecran = <ProduitsView cfg={cfg} refreshKey={refreshKey}/>;
   else if(nav==='fournisseurs') ecran = <FournisseursView cfg={cfg} refreshKey={refreshKey}/>;
+  else if(nav==='notes') ecran = <NotesView refreshKey={refreshKey}/>;
   else if(A_VENIR[nav]) ecran = <AVenir id={nav}/>;
   else ecran = <TableauDeBord cfg={cfg} email={email} toast={toast} refreshKey={refreshKey} onNavigate={aller}/>;
 
-  return <div>
+  return <NotesCtx.Provider value={{N, cfg, toast}}><div>
     <div className="topbar">
       <div style={{display:'flex',alignItems:'center',gap:10,minWidth:0}}>{!isDesktop && <button className="btn btn-sm" onClick={()=>setMenu(true)} aria-label="Menu" style={{fontSize:18,padding:'4px 11px'}}>☰</button>}<Logo/></div>
       <div style={{display:'flex',alignItems:'center',gap:10}}>
@@ -932,7 +1084,7 @@ function App(){
       <div className="main">{ecran}</div>
     </div>
     {toastNode}
-  </div>;
+  </div></NotesCtx.Provider>;
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
