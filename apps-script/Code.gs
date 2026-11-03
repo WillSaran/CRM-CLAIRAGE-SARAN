@@ -20,6 +20,15 @@
  *                  inscrit les PO (onglets « Commandes fournisseurs » et « Lignes PO »),
  *                  et range les PDF dans La mémoire › Fournisseurs › <fournisseur>.
  *
+ * Version 9 — 3 nov. 2026 : STATUTS AUTOMATIQUES (AUTO_STATUTS) — quand un fournisseur écrit, les lignes du PO
+ *   avancent toutes seules : avis d'expédition → « Expédié » + date prévue ; BO / ETA → « BO » + date ;
+ *   article annulé / discontinué → « Annulé » ; confirmation → « Confirmé » ; prêt à ramasser → « Prêt à ramasser ».
+ *   Chaque ligne est jugée à part, d'après ce qui est écrit juste après SON code (un même courriel peut dire
+ *   BO pour une ligne et annulé pour une autre, ex. Eglo PO 408082). Le PDF joint du fournisseur est lu aussi
+ *   (Canarm, Kuzco… mettent les détails dans le PDF). Un statut n'avance jamais à reculons et ne touche pas
+ *   une ligne Reçu / Livré / Annulé. Chaque changement est inscrit au fil « Notes » du CRM (Par = « Script »).
+ *   Aussi : le Tag écrit dans la description (« TAG: GESTION ADG - PAQUET SAILLANT 119722 ») est lu ;
+ *   LECTEUR passe à 6 (les PO du dernier mois sont relus une fois).
  * Version 8 — 27 oct. 2026 (après l'essai des courriels) : EN VRAI ; « ETA » ne prend plus « retaining » ni « details » ;
  *   nouveaux types « Prêt à ramasser » et « Expédition prévue » ; les relevés de compte sont ignorés.
  * Version 7 — 27 oct. 2026 : ÉTAPE 2 (MODE ESSAI à part) — les courriels des fournisseurs (confirmations, BO/ETA,
@@ -43,7 +52,9 @@ const DOSSIER_MEMOIRE = '1HE-T772uLZAWsFKQd5MOH5wBaFGDr0KO';   // La mémoire �
 const DEPUIS = '2026/06/01';                                   // début de l'année financière (choisi le 27 oct. 2026)
 const MOI = 'service@eclairagesaran.com';
 const NOM_SHEET = 'La mémoire — Éclairage';
-const LECTEUR = 5;   // version de la lecture des PO : un PO lu avec une version plus vieille est relu une fois
+const LECTEUR = 6;   // version de la lecture des PO : un PO lu avec une version plus vieille est relu une fois
+const AUTO_STATUTS = true;   // v9 : false = le script ne change plus aucun statut (le CRM montre seulement les courriels)
+const PDF_PAR_PASSE = 25;    // v9 : PDF des fournisseurs lus au plus par passe (chaque lecture prend quelques secondes)
 
 const ENTETE_PO = ['PO', 'Version', 'Type', 'Fournisseur', 'Envoyé à', 'Date commandée', 'Date requise',
   'Sous-total', 'Total', 'Lignes', 'PDF', 'Lien courriel', 'Inscrit le', 'Lu avec'];
@@ -79,6 +90,7 @@ function courrielsFournisseurs_(debut) {
   const vus = new Set(shC && shC.getLastRow() > 1 ? shC.getRange(2, 1, shC.getLastRow() - 1, 1).getDisplayValues().map(r => String(r[0]).split('|')[0]) : []);
   const stats = { messages: 0, relies: 0, pdf: 0 };
   const neuves = [];
+  const auto = AUTO_STATUTS && !COURRIELS_ESSAI ? moteurStatuts_(ss) : null;   // v9
   const tropLong = () => Date.now() - debut > 5 * 60 * 1000;
   const jour = d => Utilities.formatDate(d, 'America/Toronto', 'yyyy/MM/dd');
   const base = ' -in:sent -from:' + MOI + ' -category:promotions -category:social -in:spam -in:trash';
@@ -94,15 +106,20 @@ function courrielsFournisseurs_(debut) {
         let pos = [...new Set((sujet + '\n' + corps).match(/\b40[4-9]\d{3}\b/g) || [])].filter(p => poConnus.has(p));
         // Pas de no de PO dans le courriel (ex. DVI « Order Acknowledgement 305244 ») : on le cherche dans le PDF joint.
         const domaine = (String(m.getFrom()).match(/@([\w.-]+)/) || [])[1] || '';
-        if (!pos.length && stats.pdf < 15 && [...domaines].some(d => domaine.toLowerCase().endsWith(d.split('.').slice(-2).join('.')))) {
-          const pdf = m.getAttachments({ includeInlineImages: false }).find(a => /\.pdf$/i.test(a.getName()));
-          if (pdf) { stats.pdf++; const t = lirePdf_(pdf.copyBlob()); pos = [...new Set(String(t).match(/\b40[4-9]\d{3}\b/g) || [])].filter(p => poConnus.has(p)); }
+        // PDF joint du fournisseur (jamais notre propre PO renvoyé en pièce jointe).
+        const pdfJoint = () => m.getAttachments({ includeInlineImages: false }).find(a => /\.pdf$/i.test(a.getName()) && !/Eclairage_Moderne_Saran_PO_/i.test(a.getName()));
+        let textePdf = '';
+        if (!pos.length && stats.pdf < PDF_PAR_PASSE && [...domaines].some(d => domaine.toLowerCase().endsWith(d.split('.').slice(-2).join('.')))) {
+          const pdf = pdfJoint();
+          if (pdf) { stats.pdf++; textePdf = lirePdf_(pdf.copyBlob()); pos = [...new Set(String(textePdf).match(/\b40[4-9]\d{3}\b/g) || [])].filter(p => poConnus.has(p)); }
         }
         vus.add(m.getId());
         if (!pos.length) continue;
         const texte = sujet + ' ' + corps.split(/\n(?:Le .{5,80}a écrit|On .{5,80}wrote|-{2,}\s*Original|De ?:|From:|_{8,})/)[0];
         const type = typeCourriel_(texte, m);
         if (type === 'Relevé') continue;                                   // relevé de compte : pas une nouvelle sur une commande
+        // v9 : le PDF du fournisseur est lu aussi quand le no de PO est dans le courriel (les détails des lignes y sont souvent).
+        if (auto && !textePdf && type !== 'Facture' && stats.pdf < PDF_PAR_PASSE) { const pdf = pdfJoint(); if (pdf) { stats.pdf++; textePdf = lirePdf_(pdf.copyBlob()); } }
         const eta = ((texte.match(/\bETA\b[^.\n]{0,70}/i) || texte.match(/\b(?:back ?order\w*|en souffrance|disponib\w*|dispo\b|exp[ée]di(?:era|er|é)\b|will ship|ship(?:ping)? date|ships?\b|pr[êe]te? pour la cueillette|ready for pick ?up|jusqu'?(?:au|à)\b|available\b|delay\w*|retard\w*)[^.\n]{0,70}/i) || [''])[0]).replace(/\s+/g, ' ').trim().slice(0, 90);
         const extrait = corps.split(/\n(?:Le .{5,80}a écrit|On .{5,80}wrote|-{2,}\s*Original|De ?:|From:|_{8,})/)[0].replace(/\[[^\]]*\]|<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
         const de = String(m.getFrom()).replace(/<.*>/, '').replace(/"/g, '').trim() || m.getFrom();
@@ -111,6 +128,7 @@ function courrielsFournisseurs_(debut) {
             sujet.slice(0, 120), type, eta, extrait, 'https://mail.google.com/mail/?authuser=' + MOI + '#all/' + fil.getId(), Utilities.formatDate(new Date(), 'America/Toronto', 'yyyy-MM-dd HH:mm')];
           neuves.push(ligne); stats.relies++;
           Logger.log((COURRIELS_ESSAI ? '[essai] ' : '') + 'PO ' + po + ' | ' + ligne[2] + ' | ' + de + ' | ' + type + (eta ? ' | « ' + eta + ' »' : '') + ' | ' + sujet.slice(0, 70));
+          if (auto) auto.appliquer(po, texte + '\n' + textePdf, type, ligne[2], de);   // v9 : les lignes avancent toutes seules
         });
       }
     }
@@ -130,6 +148,7 @@ function courrielsFournisseurs_(debut) {
     }
   }
   if (shC && neuves.length) shC.getRange(shC.getLastRow() + 1, 1, neuves.length, ENTETE_COURRIELS.length).setValues(neuves);
+  if (auto) auto.ecrire();
   Logger.log((COURRIELS_ESSAI ? 'MODE ESSAI (courriels) — rien écrit. ' : '') + 'Courriels des fournisseurs lus : ' + stats.messages + ' | reliés à un PO : ' + stats.relies + ' | PDF lus pour trouver le PO : ' + stats.pdf +
     (!COURRIELS_ESSAI && !props.getProperty('courrielsFini') ? ' | rattrapage rendu au ' + (props.getProperty('courrielsDepuis') || COURRIELS_DEPUIS) : ''));
 }
@@ -151,6 +170,146 @@ function typeCourriel_(texte, m) {
   if (/\binvoice\b|\bfacture\b/i.test(t)) return 'Facture';
   if (/acknowledg|confirmation de (la )?commande|order confirmation|voici la confirmation|\bconfirm/i.test(t)) return 'Confirmation';
   return 'Autre';
+}
+
+// ───────────────────────── v9 : statuts automatiques ─────────────────────────
+// Le statut d'une ligne avance seulement (Commandé → Confirmé → BO → Expédié → Prêt à ramasser) ;
+// Reçu, Livré et Annulé ne sont jamais touchés. Une ligne modifiée à la main dans le CRM APRÈS la date
+// du courriel n'est pas touchée non plus (la personne en sait plus que le courriel).
+const ENTETE_NOTES = ['id', 'Date', 'Par', 'PO', 'Ligne', 'Produit', 'Commande client', 'Client', 'Texte', 'Fournisseur'];
+const RANG_STATUT = { 'Commandé': 0, 'Confirmé': 1, 'BO': 2, 'Expédié': 3, 'Prêt à ramasser': 4 };
+
+function moteurStatuts_(ss) {
+  const shL = ss.getSheetByName('Lignes PO');
+  if (!shL || shL.getLastRow() < 2) return null;
+  const vals = shL.getRange(2, 1, shL.getLastRow() - 1, ENTETE_LIGNES.length).getDisplayValues();
+  const parPO = {};
+  vals.forEach((r, i) => { (parPO[r[0]] = parPO[r[0]] || []).push(i); });
+  const changees = {}, applique = {}, notes = [];
+  const maintenant = () => Utilities.formatDate(new Date(), 'America/Toronto', 'yyyy-MM-dd HH:mm');
+
+  function appliquer(po, texteBrut, type, dateMsg, de) {
+    const idx = parPO[po] || [];
+    if (!idx.length) return;
+    const t = normaliser_(texteBrut);
+    const parLigne = analyserLignes_(t, idx.map(i => vals[i][2]), dateMsg);
+    const mentionnees = parLigne.some(a => a.vu);
+    const dateLivraison = datePrevue_(t, dateMsg);
+    idx.forEach((i, k) => {
+      const a = parLigne[k];
+      let statut = null, date = '';
+      if (a.statut) { statut = a.statut; date = a.date || (a.statut === 'Expédié' ? dateLivraison : ''); }
+      else if (type === 'Expédition') { if (!mentionnees || a.vu) { statut = 'Expédié'; date = dateLivraison; } }
+      else if (type === 'Prêt à ramasser') { if (!mentionnees || a.vu) statut = 'Prêt à ramasser'; }
+      else if (type === 'Confirmation') statut = 'Confirmé';
+      else if (type === 'BO / ETA' && idx.length === 1) { statut = 'BO'; date = dateDansTexte_(t, dateMsg); }
+      else if (type === 'Annulation' && idx.length === 1) statut = 'Annulé';
+      if (statut) changer(i, statut, date, dateMsg, de);
+    });
+  }
+
+  function changer(i, statut, date, dateMsg, de) {
+    const r = vals[i];
+    const actuel = r[10] || 'Commandé';
+    if (/^(Reçu|Livré|Annulé|Retour)/.test(actuel)) return;
+    if (statut === 'Annulé' || statut === 'BO') { if (!/^(Commandé|Confirmé|BO)$/.test(actuel)) return; }
+    else if (!(RANG_STATUT[statut] > (RANG_STATUT[actuel] || 0))) return;
+    const mod = String(r[14]).slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(mod) && mod > dateMsg && !/^Script/.test(r[15])) return;     // modifié à la main après le courriel
+    if (applique[i] && applique[i] > dateMsg) return;                                          // un courriel plus récent a déjà décidé
+    if (statut === actuel && (!date || date === r[12])) return;                                // rien de nouveau
+    const avant = actuel + (r[12] ? ' (prévu ' + r[12] + ')' : '');
+    r[10] = statut; if (date) r[12] = date;
+    r[13] = 'auto : courriel du ' + dateMsg + ' (' + String(de).slice(0, 40) + ')';
+    r[14] = maintenant(); r[15] = 'Script';
+    changees[i] = true; applique[i] = dateMsg;
+    notes.push([Utilities.getUuid().slice(0, 12), Utilities.formatDate(new Date(), 'America/Toronto', 'yyyy-MM-dd HH:mm:ss'), 'Script', r[0], r[1], r[2], r[7], r[8],
+      'Statut → ' + statut + (date ? ' · prévu le ' + date : '') + ' (avant : ' + avant + ') · d\'après le courriel du ' + dateMsg + ' de ' + String(de).slice(0, 40), '']);
+  }
+
+  function ecrire() {
+    const lignes = Object.keys(changees).map(Number);
+    if (lignes.length) {
+      // Avant d'écrire : la rangée est-elle toujours la même ligne ? (le CRM ou une autre passe a pu bouger les rangées)
+      const ids = shL.getRange(2, 1, shL.getLastRow() - 1, 3).getDisplayValues();
+      lignes.forEach(i => {
+        const r = vals[i], x = ids[i];
+        if (!x || x[0] !== r[0] || x[1] !== r[1] || x[2] !== r[2]) { Logger.log('Statut auto non écrit (rangée déplacée) : PO ' + r[0] + ' ' + r[2]); return; }
+        shL.getRange(i + 2, 11).setNumberFormat('@').setValue(r[10]);
+        shL.getRange(i + 2, 13, 1, 4).setNumberFormat('@').setValues([[r[12], r[13], r[14], r[15]]]);
+      });
+    }
+    if (notes.length) { const shN = onglet_(ss, 'Notes', ENTETE_NOTES); shN.getRange(shN.getLastRow() + 1, 1, notes.length, ENTETE_NOTES.length).setNumberFormat('@').setValues(notes); }
+    Logger.log('Statuts automatiques : ' + lignes.length + ' ligne(s) mise(s) à jour.');
+    notes.forEach(n => Logger.log('   PO ' + n[3] + ' ' + n[5] + ' — ' + n[8]));
+  }
+  return { appliquer, ecrire };
+}
+
+function normaliser_(s) { return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' '); }
+
+// Les façons dont un fournisseur écrit un de nos codes : « EG204922A » → « 204922a », « KUZVL18224-BK-UNV » → « vl18224-bk-unv »…
+function variantesCode_(code) {
+  const c = String(code || '').toLowerCase().replace(/^[#*]+/, '');
+  const v = new Set([c]);
+  const sans = c.replace(/^[a-z]{2,3}/, '');
+  if (sans !== c && sans.length >= 6 && /\d/.test(sans)) v.add(sans);
+  return [...v].filter(x => x.length >= 4);
+}
+
+// Pour chaque ligne : le code est-il dans le texte (vu), et que dit le texte juste après LUI (jusqu'au code suivant) ?
+function analyserLignes_(t, codes, dateMsg) {
+  const pos = codes.map(code => {
+    let best = -1, lg = 0;
+    variantesCode_(code).forEach(v => {
+      let i = t.indexOf(v);
+      while (i >= 0) {
+        const avant = i === 0 ? ' ' : t[i - 1], apres = t[i + v.length] || ' ';
+        if (!/[a-z0-9]/.test(avant) && !/[a-z0-9]/.test(apres)) { if (best < 0 || i < best) { best = i; lg = v.length; } break; }
+        i = t.indexOf(v, i + 1);
+      }
+    });
+    return { i: best, fin: best + lg };
+  });
+  return pos.map((p, k) => {
+    if (p.i < 0) return { vu: false };
+    const prochain = pos.filter((q, j) => j !== k && q.i > p.i).map(q => q.i);
+    const fen = t.slice(p.fin, Math.min(p.fin + 180, prochain.length ? Math.min(...prochain) : Infinity));
+    const date = dateDansTexte_(fen, dateMsg);
+    if (/cancel|annul|discontinu|no longer (available|made|produced|offered)|n.est plus (disponible|fabrique|offert)|obsolete/.test(fen)) return { vu: true, statut: 'Annulé' };
+    const motBO = /back ?order(?:ed)?|\bb\/o\b|rupture|en souffrance|not (?:yet )?(?:available|in stock)|pas (?:encore )?(?:disponible|en stock)|out of stock|\beta\b|delay|retard/;
+    const zeroBO = /(?:back ?order(?:ed)?|b\/o)\s*(?:qty|quantity|quantite)?\s*:?\s*0(?:\.0+)?\b/;
+    if ((motBO.test(fen) && !zeroBO.test(fen)) || (date && /not confirmed|non confirme|approx|environ|\bmid-|\bmi-|early|late|debut|fin |vers |around/.test(fen))) return { vu: true, statut: 'BO', date };
+    if (/shipped|expedie|ship date|tracking/.test(fen)) return { vu: true, statut: 'Expédié', date: '' };
+    return { vu: true };
+  });
+}
+
+const MOIS_ = { jan: 1, janv: 1, janvier: 1, january: 1, feb: 2, fev: 2, fevr: 2, fevrier: 2, february: 2, mar: 3, mars: 3, march: 3, apr: 4, avr: 4, avril: 4, april: 4,
+  may: 5, mai: 5, jun: 6, juin: 6, june: 6, jul: 7, juil: 7, juillet: 7, july: 7, aug: 8, aou: 8, aout: 8, august: 8, sep: 9, sept: 9, septembre: 9, september: 9,
+  oct: 10, octobre: 10, october: 10, nov: 11, novembre: 11, november: 11, dec: 12, decembre: 12, december: 12 };
+
+// Une date dans un bout de texte déjà normalisé. « mid-December » → le 15, « early/début » → le 5, « late/fin » → le 25,
+// un mois seul → le 1er. L'année : celle du courriel, ou la suivante si la date tombe plus d'un mois avant le courriel.
+function dateDansTexte_(s, dateMsg) {
+  const p2 = n => ('0' + n).slice(-2), ok = (y, m, d) => m >= 1 && m <= 12 && d >= 1 && d <= 31 ? y + '-' + p2(m) + '-' + p2(d) : '';
+  const base = String(dateMsg || '').slice(0, 10) || Utilities.formatDate(new Date(), 'America/Toronto', 'yyyy-MM-dd'), y0 = Number(base.slice(0, 4));
+  const avecAnnee = (m, d) => { let r = ok(y0, m, d); if (r && r < base && (new Date(base) - new Date(r)) > 30 * 864e5) r = ok(y0 + 1, m, d); return r; };
+  let m = s.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/); if (m) return ok(+m[1], +m[2], +m[3]);
+  m = s.match(/\b(\d{1,2})\/(\d{1,2})\/(20\d{2})\b/); if (m) return ok(+m[3], +m[1], +m[2]);                 // M/J/AAAA (fournisseurs américains)
+  m = s.match(/\b(mid|mi|early|debut|late|fin|end of)[\s-]+(?:de |d['’] ?)?([a-z]{3,9})\b/);
+  if (m && MOIS_[m[2]]) return avecAnnee(MOIS_[m[2]], /mi/.test(m[1]) ? 15 : /early|debut/.test(m[1]) ? 5 : 25);
+  m = s.match(/\b([a-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/); if (m && MOIS_[m[1]]) return avecAnnee(MOIS_[m[1]], +m[2]);
+  m = s.match(/\b(\d{1,2})(?:er)?\s+([a-z]{3,9})\b/); if (m && MOIS_[m[2]]) return avecAnnee(MOIS_[m[2]], +m[1]);
+  m = s.match(/\b(?:en|in|for|pour)\s+([a-z]{3,9})\b/); if (m && MOIS_[m[1]] && m[1].length > 3) return avecAnnee(MOIS_[m[1]], 1);
+  return '';
+}
+
+// La date de livraison annoncée dans tout le courriel : seulement juste après un mot de livraison
+// (pour ne pas prendre la date d'expédition : « Estimated Delivery date: 11/9/2026 … Ship Date: 11/2/2026 »).
+function datePrevue_(t, dateMsg) {
+  const z = t.match(/(estimated delivery|delivery date|expected delivery|\beta\b|livraison prevue|date prevue|prevu le|arrivee prevue)[\s\S]{0,45}/);
+  return z ? dateDansTexte_(z[0], dateMsg) : '';
 }
 
 // ───────────────────────── Étape 1 : PO envoyés ─────────────────────────
@@ -363,6 +522,11 @@ function lirePO_(texte) {
     if (req) l.requisition = req[1];
     const reste = t.replace(/Tag\s*:\s*\d{4,}.*?(?=\s+R[ée]quisition|\s*$)/i, ' ').replace(/R[ée]quisition\s*:\s*\d*-?/i, ' ').replace(/^\s*\d{5,7}\b/, ' ').replace(/\s+/g, ' ').trim();
     if (reste) l.desc = (l.desc + ' ' + reste).slice(0, 160);
+    // v9 : Tag écrit dans la description ou la note, nom AVANT le numéro (« TAG: GESTION ADG - PAQUET SAILLANT 119722 »).
+    if (!l.cmdClient) {
+      const t2 = (l.desc + ' ' + l.note).match(/TAG\s*:?\s*([^\d:]{3,80}?)[\s\-–]*\b(\d{6})\b/i);
+      if (t2 && !/^\s*(stock|stk|showroom)\b/i.test(t2[1])) { l.cmdClient = t2[2]; l.client = t2[1].replace(/[\s\-–]+$/, '').trim().slice(0, 80); }
+    }
     const orig = (l.desc + ' ' + l.note).match(/PO\s?#?\s?(\d{6})\b/i);           // retour : le PO d'origine
     if (orig) l.note = ('PO d\'origine ' + orig[1] + (l.note ? ' — ' + l.note : '')).slice(0, 150);
   });
@@ -481,4 +645,4 @@ function installer() {
   ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'passe').forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger('passe').timeBased().everyHours(1).create();
   Logger.log('Installé : « passe » roule chaque heure. Déclencheurs dans ce projet : ' + ScriptApp.getProjectTriggers().length + '.');
-}
+}
