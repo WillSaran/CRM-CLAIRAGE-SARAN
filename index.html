@@ -84,7 +84,9 @@ const {useState,useEffect,useCallback,useContext} = React;
 //   apiKey              : facultatif
 //   memoireSpreadsheetId: Google Sheet « La mémoire — Éclairage » (onglets créés par le CRM au besoin)
 //   gmailLibelles       : libellés Gmail à afficher dans Courriel, séparés par des virgules
-const APP_VERSION = 'v9';
+const APP_VERSION = 'v10';
+// v10 : recherche élargie (description, notes, contracteur, client final, adresse de livraison), « Infos de la commande » par commande client,
+//       et Tag lu dans la description quand il n'est pas sur sa propre ligne (ex. « TAG: GESTION ADG - PAQUET SAILLANT 119722 »).
 // v9 : fiches fournisseurs modifiables (minimums, délais, téléphones…), contacts par fournisseur (onglet « Contacts fournisseurs ») et notes par fournisseur.
 // v8 : fil de notes (onglet « Notes » de La mémoire : date + qui, jamais effacé, du plus récent au plus vieux)
 //      et connexion gardée sur l'appareil (plus besoin de tout refaire en rouvrant l'onglet).
@@ -436,6 +438,11 @@ function useMemoire(cfg, refreshKey){
         un("'Courriels PO'!A1:K", COURRIEL_ENTETE)]);
       const msgsPar = {}; msgs.filter(x=>x.PO).sort((a,b)=>String(b.Date).localeCompare(String(a.Date))).forEach(x=>{ (msgsPar[x.PO] = msgsPar[x.PO] || []).push(x); });
       const parPO = {}; po.filter(p=>p.PO).forEach(p=>{ parPO[p.PO] = p; });
+      // v10 : si le script n'a pas lu le Tag (écrit dans la description, ex. « TAG: GESTION ADG - PAQUET SAILLANT 119722 »),
+      // on le retrouve ici. Le nom du client est pris sur une autre ligne de la même commande quand il y en a une.
+      const clientParCmd = {}; lignes.forEach(l=>{ if(l['Commande client'] && l.Client && !clientParCmd[l['Commande client']]) clientParCmd[l['Commande client']] = l.Client; });
+      lignes.forEach(l=>{ if(l['Commande client']) return; const m = String(l.Description||'').match(/TAG\s*:?\s*(.*?)[\s\-–]*\b(\d{6})\b/i);
+        if(m){ l['Commande client'] = m[2]; l.Client = clientParCmd[m[2]] || m[1].replace(/[\s\-–]+$/,'').trim() || 'Client ?'; l._tagDesc = true; } });
       lignes.forEach(l=>{ const p = parPO[l.PO] || {}; l._po = p; l._statut = l.Statut || 'Commandé';
         l._date = p['Date commandée'] || ''; l._fourn = p.Fournisseur || p['Envoyé à'] || ''; });
       setD({lu:true, err:'', po:po.filter(p=>p.PO), lignes:lignes.filter(l=>l.PO), fourn:fourn.filter(f=>f.Fournisseur), aVerifier:av.filter(a=>a.PO), msgsPar, msgs:msgs.filter(x=>x.PO)});
@@ -563,6 +570,52 @@ const noteDeLigne = l => n => String(n.PO)===String(l.PO) && String(n.Ligne)===S
 const cibleLigne = l => ({PO:l.PO, Ligne:l.Ligne, Produit:l.Produit, 'Commande client':l['Commande client'], Client:l.Client});
 // Toutes les notes qui touchent une commande client (sur la commande elle-même ou sur une de ses lignes de PO).
 const noteDeCommande = (no, ls) => n => String(n['Commande client'])===String(no) || ls.some(l=>noteDeLigne(l)(n));
+// ── Infos de la commande (onglet « Infos commandes ») ── v10
+// Le contracteur, le client final et l'adresse de livraison ne sont pas sur les bons d'achat : on les inscrit ici,
+// une fois par commande client, et la recherche les trouve partout (ex. « Paquet », « Bromont », « Gestion ADG »).
+const INFOS_ENTETE = ['Commande client','Contracteur','Client final','Adresse livraison','Téléphone','Courriel','Note','Modifié le','Par'];
+const INFOS_CHAMPS = ['Contracteur','Client final','Adresse livraison','Téléphone','Courriel','Note'];
+function useInfos(cfg, refreshKey, actif){
+  const id = cfg.memoireSpreadsheetId;
+  const [s,setS]=useState({lu:false, par:{}});
+  const lire = useCallback(async force=>{
+    if(!actif || !id) return;
+    try{ const v = await lireCache(id, "'Infos commandes'!A1:I", force); const par = {};
+      rowsToObjects(v.slice(1), INFOS_ENTETE).forEach(r=>{ if(r['Commande client']) par[String(r['Commande client'])] = r; }); setS({lu:true, par}); }
+    catch(e){ setS({lu:true, par:{}}); }
+  },[id, actif]);
+  useEffect(()=>{ lire(refreshKey>0); },[lire, refreshKey]);
+  const ecrire = async (no, champs, par)=>{
+    await ensureSheetsExist(id, [{name:'Infos commandes', headers:INFOS_ENTETE}]);
+    const ex = s.par[String(no)];
+    const n = {...(ex||{}), ...champs, 'Commande client':String(no), 'Modifié le':dateHeure(), Par:par||''};
+    if(ex && ex._row) await sheetsUpdateRow(id, "'Infos commandes'", ex._row, objectToRow(n, INFOS_ENTETE));
+    else await sheetsAppendRow(id, "'Infos commandes'", objectToRow(n, INFOS_ENTETE));
+    await lire(true);
+  };
+  return {...s, ecrire};
+}
+function resumeInfos(i){ return i ? [i['Client final'] && 'client : '+i['Client final'], i.Contracteur && 'contracteur : '+i.Contracteur, i['Adresse livraison']].filter(Boolean).join(' · ') : ''; }
+function InfosCommande({no, client}){
+  const {I, cfg, toast} = useContext(NotesCtx) || {};
+  const [edit,setEdit]=useState(false), [busy,setBusy]=useState(false);
+  const i = (I && I.par[String(no)]) || null;
+  const [f,setF]=useState({});
+  if(!I || !cfg || !cfg.memoireSpreadsheetId) return null;
+  const ouvrir = ()=>{ const o = {}; INFOS_CHAMPS.forEach(k=>{ o[k] = (i||{})[k]||''; }); if(!o.Contracteur && !i && client) o.Contracteur = nomClient(client); setF(o); setEdit(true); };
+  const sauver = async ()=>{ setBusy(true); try{ await I.ecrire(no, f, getNom()); toast('Infos de la commande '+no+' enregistrées.'); setEdit(false); }catch(e){ toast(apiErrMsg(e),'err'); } setBusy(false); };
+  return <div style={{margin:'6px 0',padding:'8px 10px',background:'var(--bg3)',borderRadius:9,fontSize:13}} onClick={e=>e.stopPropagation()}>
+    {!edit ? <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+        <div style={{minWidth:0}}>{i ? INFOS_CHAMPS.filter(k=>i[k]).map(k=><div key={k}><span className="muted">{k} : </span>{i[k]}</div>) : <span className="muted">Contracteur, client final, adresse de livraison : rien d'inscrit.</span>}</div>
+        <button className="btn btn-sm" onClick={ouvrir}>{i ? '✎ Modifier les infos' : '+ Infos de la commande'}</button></div>
+      : <div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:'0 10px'}}>
+          {INFOS_CHAMPS.map(k=><div className="field" key={k}><label>{k}</label><input value={f[k]||''} placeholder={k==='Adresse livraison'?'ex. 141-1 rue Cercle des Cantons, Bromont':k==='Client final'?'ex. Paquet Marc-Olivier & Saillant Catherine':''} onChange={e=>setF({...f,[k]:e.target.value})}/></div>)}
+        </div>
+        <div style={{display:'flex',gap:8}}><button className="btn btn-sm btn-p" disabled={busy} onClick={sauver}>{busy?'…':'Enregistrer'}</button><button className="btn btn-sm" onClick={()=>setEdit(false)}>Annuler</button></div>
+      </div>}
+  </div>;
+}
 function NotesView({refreshKey}){
   const {N} = useContext(NotesCtx) || {};
   const [q,setQ]=useState(''), [nb,setNb]=useState(60);
@@ -629,7 +682,7 @@ function LigneSuivi({l, M, email, toast, montrerPO, montrerClient}){
       <div style={{flex:'1 1 240px',minWidth:0}}>
         <div style={{fontSize:13.5,fontWeight:600}}>{l.Qté} × {l.Produit} {montrerPO && <span className="muted" style={{fontWeight:400}}>· PO {l.PO} · {l._fourn}</span>}</div>
         <div className="muted" style={{fontSize:12.5,overflow:'hidden',textOverflow:'ellipsis'}}>{l.Description}</div>
-        {montrerClient && <div style={{fontSize:12.5,marginTop:2}}>{l['Commande client'] ? (estStock(l.Client) ? '📦 Stock / showroom' : '👤 '+l.Client+' · cmd '+l['Commande client']) : <span className="muted">Aucun client (stock ?)</span>}</div>}
+        {montrerClient && <div style={{fontSize:12.5,marginTop:2}}>{l['Commande client'] ? (estStock(l.Client) ? '📦 Stock / showroom' : '👤 '+l.Client+' · cmd '+l['Commande client']+(l._tagDesc ? ' (Tag lu dans la description)' : '')) : <span className="muted">Aucun client (stock ?)</span>}</div>}
         {derniere ? <div style={{fontSize:12,marginTop:2}}>🗒 <b>{fmtNoteDate(derniere.Date)}</b> <span style={{color:'var(--accent)',fontWeight:700}}>{derniere.Par}</span> : {derniere.Texte}{l.Note ? <span className="muted"> · PO : {l.Note}</span> : null}</div>
           : (l.Note || l['Note suivi']) && <div className="muted" style={{fontSize:12,marginTop:2}}>{l['Note suivi'] ? '✎ '+l['Note suivi'] : ''}{l['Note suivi'] && l.Note ? ' · ' : ''}{l.Note ? 'PO : '+l.Note : ''}</div>}
       </div>
@@ -653,22 +706,45 @@ function LigneSuivi({l, M, email, toast, montrerPO, montrerClient}){
   </div>;
 }
 
+// v10 : date prévue lue dans le courriel (« Estimated Delivery date: 11/9/2026 », « ETA Nov 5 », « livraison le 8 janvier »…).
+// On ne regarde que juste après un mot-clé de livraison, pour ne pas prendre la date d'expédition.
+const MOIS = {jan:1,janv:1,janvier:1,january:1,feb:2,fev:2,fevr:2,fevrier:2,february:2,mar:3,mars:3,march:3,apr:4,avr:4,avril:4,april:4,may:5,mai:5,jun:6,juin:6,june:6,jul:7,juil:7,juillet:7,july:7,aug:8,aou:8,aout:8,august:8,sep:9,sept:9,septembre:9,september:9,oct:10,octobre:10,october:10,nov:11,novembre:11,november:11,dec:12,decembre:12,december:12};
+function datePrevueDe(texte, dateCourriel){
+  const t = sansAccent(String(texte||'')).toLowerCase();
+  const z = t.match(/(estimated delivery|delivery date|expected delivery|\beta\b|livraison prevue|date prevue|prevu le|arrivee prevue)[^]{0,45}/);
+  if(!z) return '';
+  const s = z[0], p2 = n=>String(n).padStart(2,'0'), ok = (y,m,d)=> m>=1&&m<=12&&d>=1&&d<=31 ? y+'-'+p2(m)+'-'+p2(d) : '';
+  const base = String(dateCourriel||todayISO()).slice(0,10), y0 = +base.slice(0,4);
+  const avecAnnee = (m,d)=>{ let r = ok(y0,m,d); if(r && r < base && (new Date(base) - new Date(r)) > 30*864e5) r = ok(y0+1,m,d); return r; };
+  let m = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})/); if(m) return ok(+m[1],+m[2],+m[3]);
+  m = s.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/); if(m) return ok(+m[3],+m[1],+m[2]);   // M/J/AAAA (fournisseurs américains)
+  m = s.match(/\b([a-z]{3,9})\.?\s+(\d{1,2})\b/); if(m && MOIS[m[1]]) return avecAnnee(MOIS[m[1]],+m[2]);
+  m = s.match(/\b(\d{1,2})\s+([a-z]{3,9})\b/); if(m && MOIS[m[2]]) return avecAnnee(MOIS[m[2]],+m[1]);
+  return '';
+}
 // Le dernier courriel dit « Expédition » ou « Confirmation » : un bouton pour l'appliquer aux lignes ouvertes (c'est toi qui cliques).
 function AppliquerSuggestion({p, M, email, toast}){
   const [busy,setBusy]=useState(false);
   const x = (M.msgsPar[p.PO]||[])[0]; if(!x) return null;
   const cible = x.Type==='Expédition' ? 'Expédié' : x.Type==='Prêt à ramasser' ? 'Prêt à ramasser' : x.Type==='Confirmation' ? 'Confirmé' : null; if(!cible) return null;
+  const prevu = cible==='Prêt à ramasser' ? '' : datePrevueDe([x.Extrait, x['ETA (texte)'], x.Sujet].join(' '), x.Date);
   const ls = p._ls.filter(l=> cible==='Confirmé' ? l._statut==='Commandé' : cible==='Expédié' ? /^(Commandé|Confirmé|BO)$/.test(l._statut) : /^(Commandé|Confirmé|BO|Expédié)$/.test(l._statut));
-  if(!ls.length) return null;
-  const go = async ()=>{ setBusy(true); try{ await M.majLignes(ls, {Statut:cible, 'Note suivi':'d\'après le courriel du '+x.Date+' ('+x.De+')'}, getNom() || email); toast(ls.length+' ligne(s) → '+cible); }catch(e){ toast(apiErrMsg(e),'err'); } setBusy(false); };
-  return <button className="btn btn-sm" style={{marginTop:8}} disabled={busy} onClick={go}>{busy?'…':'Mettre les '+ls.length+' ligne(s) ouvertes à « '+cible+' » (courriel du '+fmtJour(x.Date)+')'}</button>;
+  const sansDate = prevu ? p._ls.filter(l=>!FERME(l._statut) && l._statut===cible && l['Date prévue']!==prevu) : [];
+  if(!ls.length && !sansDate.length) return null;
+  const champs = {Statut:cible, 'Note suivi':'d\'après le courriel du '+x.Date+' ('+x.De+')', ...(prevu ? {'Date prévue':prevu} : {})};
+  const cibles = ls.length ? ls : sansDate;
+  const go = async ()=>{ setBusy(true); try{ await M.majLignes(cibles, champs, getNom() || email); toast(cibles.length+' ligne(s) → '+cible+(prevu ? ', prévu le '+fmtJour(prevu) : '')); }catch(e){ toast(apiErrMsg(e),'err'); } setBusy(false); };
+  const txt = ls.length ? 'Mettre les '+ls.length+' ligne(s) ouvertes à « '+cible+' »'+(prevu ? ', prévu le '+fmtJour(prevu) : '') : 'Ajouter la date prévue du '+fmtJour(prevu)+' aux '+cibles.length+' ligne(s) « '+cible+' »';
+  return <button className="btn btn-sm" style={{marginTop:8}} disabled={busy} onClick={go}>{busy?'…':txt+' (courriel du '+fmtJour(x.Date)+')'}</button>;
 }
 
 function Recherche({q, setQ, ph, children}){
   return <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:12}}>
     <input value={q} onChange={e=>setQ(e.target.value)} placeholder={ph} style={{flex:'1 1 220px',width:'auto'}}/>{children}</div>;
 }
-const contient = (o, q) => !q || JSON.stringify(o).toLowerCase().includes(q.toLowerCase());
+const contient = (o, q) => !q || sansAccent(JSON.stringify(o)).toLowerCase().includes(sansAccent(q).toLowerCase().trim());
+// v10 : tout ce qu'on sait d'une commande client, pour la recherche (infos saisies + notes).
+function texteCommande(ctx, no){ if(!ctx || !no) return ''; const i = (ctx.I && ctx.I.par[no]) || {}; return [Object.values(i), (ctx.N ? ctx.N.liste : []).filter(n=>String(n['Commande client'])===String(no)).map(n=>n.Texte)]; }
 function PasConfigure({M}){
   if(!M.configure) return <div className="card muted" style={{fontSize:13.5}}>Indique l'ID du Sheet « La mémoire — Éclairage » dans Réglages.</div>;
   if(M.err) return <div className="card" style={{color:'var(--danger)',fontSize:13.5}}>{M.err}</div>;
@@ -679,6 +755,7 @@ function PasConfigure({M}){
 // ── Commandes fournisseurs (un PO = une carte) ──
 function CmdFournView({cfg, email, toast, refreshKey}){
   const M = useMemoire(cfg, refreshKey);
+  const ctx = useContext(NotesCtx);
   const [q,setQ]=useState(''), [filtre,setFiltre]=useState('ouverts'), [ouvert,setOuvert]=useState(null), [nb,setNb]=useState(40);
   const p0 = PasConfigure({M}); if(p0) return <div><h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Commandes fournisseurs</h2>{p0}</div>;
   const auj = todayISO();
@@ -686,11 +763,12 @@ function CmdFournView({cfg, email, toast, refreshKey}){
   const liste = M.po.map(p=>{ const ls = lignesPar[p.PO]||[]; const ouv = ls.filter(l=>!FERME(l._statut));
       return {...p, _ls:ls, _ouv:ouv.length, _bo:ls.filter(l=>l._statut==='BO').length, _retard: ouv.some(l=>(l['Date prévue'] && l['Date prévue']<auj) || (!l['Date prévue'] && p['Date requise'] && p['Date requise']<auj && /Commandé|Confirmé/.test(l._statut)))}; })
     .filter(p=> filtre==='tous' || (filtre==='ouverts' && p._ouv) || (filtre==='bo' && p._bo) || (filtre==='retard' && p._retard))
-    .filter(p=> contient([p.PO,p.Fournisseur,p['Envoyé à'],p._ls.map(l=>[l.Produit,l.Client,l['Commande client']])], q))
+    .filter(p=> contient([p.PO,p.Fournisseur,p['Envoyé à'],p._ls.map(l=>[l.Produit,l.Client,l['Commande client'],l.Description,l.Note,l['Note suivi'],texteCommande(ctx,l['Commande client'])]),
+      (ctx && ctx.N ? ctx.N.liste : []).filter(n=>String(n.PO)===String(p.PO)).map(n=>n.Texte)], q))
     .sort((a,b)=>String(b['Date commandée']).localeCompare(String(a['Date commandée'])) || String(b.PO).localeCompare(String(a.PO)));
   return <div>
     <h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Commandes fournisseurs</h2>
-    <Recherche q={q} setQ={setQ} ph="Chercher : no de PO, fournisseur, produit, client…">
+    <Recherche q={q} setQ={setQ} ph="Chercher : no de PO, fournisseur, produit, client, contracteur, adresse…">
       <select value={filtre} onChange={e=>setFiltre(e.target.value)} style={{width:'auto'}}>
         <option value="ouverts">PO ouverts (pas tout reçu)</option><option value="bo">Avec une ligne en BO</option><option value="retard">En retard</option><option value="tous">Tous les PO</option></select>
     </Recherche>
@@ -737,22 +815,24 @@ function grouperClients(lignes){
 }
 function CmdClientsView({cfg, email, toast, refreshKey, onClient}){
   const M = useMemoire(cfg, refreshKey);
+  const ctx = useContext(NotesCtx);
   const [q,setQ]=useState(''), [filtre,setFiltre]=useState('ouvertes'), [ouvert,setOuvert]=useState(null), [nb,setNb]=useState(40);
   const p0 = PasConfigure({M}); if(p0) return <div><h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Commandes clients</h2>{p0}</div>;
   const liste = grouperClients(M.lignes)
     .filter(c=> filtre==='toutes' || (filtre==='ouvertes' && c.ouv) || (filtre==='bo' && c.bo))
-    .filter(c=> contient([c.no,c.client,c.lignes.map(l=>[l.Produit,l.PO,l._fourn])], q))
+    .filter(c=> contient([c.no,c.client,c.lignes.map(l=>[l.Produit,l.PO,l._fourn,l.Description,l['Note suivi']]),texteCommande(ctx,c.no)], q))
     .sort((a,b)=>String(b.date).localeCompare(String(a.date)));
   return <div>
     <h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Commandes clients</h2>
-    <Recherche q={q} setQ={setQ} ph="Chercher : client, no de commande, produit, PO…">
+    <Recherche q={q} setQ={setQ} ph="Chercher : client, contracteur, adresse de livraison, no de commande, produit, PO…">
       <select value={filtre} onChange={e=>setFiltre(e.target.value)} style={{width:'auto'}}>
         <option value="ouvertes">En cours (pas tout reçu)</option><option value="bo">Avec un produit en BO</option><option value="toutes">Toutes</option></select>
     </Recherche>
     <div className="muted" style={{fontSize:12.5,marginBottom:8}}>{liste.length} commande(s) · d'après les Tags de tes PO (les commandes de stock et showroom sont à part)</div>
     {liste.slice(0,nb).map(c=><div key={c.no} className="card" style={{marginBottom:8,padding:12}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap',cursor:'pointer'}} onClick={()=>setOuvert(o=>o===c.no?null:c.no)}>
-        <div><div style={{fontWeight:700,fontSize:14.5}}>{c.client}</div><div className="muted" style={{fontSize:12.5}}>Commande {c.no} · {c.lignes.length} produit(s) · dernier PO {fmtJour(c.date)}</div></div>
+        <div><div style={{fontWeight:700,fontSize:14.5}}>{c.client}</div><div className="muted" style={{fontSize:12.5}}>Commande {c.no} · {c.lignes.length} produit(s) · dernier PO {fmtJour(c.date)}</div>
+          {ctx && ctx.I && resumeInfos(ctx.I.par[String(c.no)]) && <div style={{fontSize:12.5,color:'var(--accent)'}}>{resumeInfos(ctx.I.par[String(c.no)])}</div>}</div>
         <div style={{display:'flex',gap:6,alignItems:'center'}}>
           {c.bo>0 && <span className="badge" style={{color:'var(--warning)'}}>{c.bo} en BO</span>}
           <span className="badge" style={{color:c.ouv?'var(--accent)':'var(--success)'}}>{c.ouv ? c.ouv+' à recevoir' : 'Tout reçu'}</span>
@@ -760,6 +840,7 @@ function CmdClientsView({cfg, email, toast, refreshKey, onClient}){
       </div>
       {ouvert===c.no && <div style={{marginTop:8}}>
         <button className="btn btn-sm" style={{marginBottom:4}} onClick={()=>onClient(cleClient(c.client))}>👤 Fiche de {nomClient(c.client)}</button>
+        <InfosCommande no={c.no} client={c.client}/>
         {c.lignes.map(l=><LigneSuivi key={l._row} l={l} M={M} email={email} toast={toast} montrerPO/>)}
         <NotesFil filtre={noteDeCommande(c.no, c.lignes)} cible={{'Commande client':c.no, Client:c.client}} titre={'NOTES SUR LA COMMANDE '+c.no} contexte/></div>}
     </div>)}
@@ -916,6 +997,7 @@ function FicheClient({c, M, email, toast, onRetour}){
     </div>
     {cmds.map(x=><div key={x.no} className="card" style={{marginBottom:8,padding:12}}>
       <div style={{display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}}><b>Commande {x.no}</b><span className="muted" style={{fontSize:12.5}}>{fmtJour(x.date)} · {x.ouv ? x.ouv+' à recevoir' : 'tout reçu'}</span></div>
+      <InfosCommande no={x.no} client={c.nom}/>
       {x.ls.map(l=><LigneSuivi key={l._row} l={l} M={M} email={email} toast={toast} montrerPO/>)}
       <NotesFil filtre={noteDeCommande(x.no, x.ls)} cible={{'Commande client':x.no, Client:c.nom}} titre={'NOTES SUR LA COMMANDE '+x.no} contexte max={3}/>
       {(()=>{ const ms = [...new Set(x.ls.map(l=>l.PO))].flatMap(po=>M.msgsPar[po]||[]).sort((a,b)=>String(b.Date).localeCompare(String(a.Date)));
@@ -926,23 +1008,24 @@ function FicheClient({c, M, email, toast, onRetour}){
 }
 function ClientsView({cfg, email, toast, refreshKey, choisi, setChoisi}){
   const M = useMemoire(cfg, refreshKey);
+  const ctx = useContext(NotesCtx);
   const [q,setQ]=useState(''), [filtre,setFiltre]=useState('ouverts'), [nb,setNb]=useState(60);
   const p0 = PasConfigure({M}); if(p0) return <div><h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Clients</h2>{p0}</div>;
   const rep = grouperRepertoire(M.lignes);
   const c = choisi && rep.find(x=>x.cle===choisi);
   if(c) return <FicheClient c={c} M={M} email={email} toast={toast} onRetour={()=>setChoisi(null)}/>;
   const liste = rep.filter(x=>filtre==='tous' || (filtre==='ouverts' && x.ouv) || (filtre==='bo' && x.bo))
-    .filter(x=>contient([x.nom,[...x.cmds],[...x.pos],x.lignes.map(l=>l.Produit)], q))
+    .filter(x=>contient([x.nom,[...x.cmds],[...x.pos],x.lignes.map(l=>[l.Produit,l.Description]),[...x.cmds].map(no=>texteCommande(ctx,no))], q))
     .sort((a,b)=> filtre==='tous' ? a.nom.localeCompare(b.nom) : b.dernier.localeCompare(a.dernier));
   return <div>
     <h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Clients</h2>
-    <Recherche q={q} setQ={setQ} ph="Chercher : nom, no de commande, PO, produit…">
+    <Recherche q={q} setQ={setQ} ph="Chercher : nom, client final, adresse, no de commande, PO, produit…">
       <select value={filtre} onChange={e=>setFiltre(e.target.value)} style={{width:'auto'}}>
         <option value="ouverts">Avec des produits à recevoir</option><option value="bo">Avec un produit en BO</option><option value="tous">Tous (A à Z)</option></select>
     </Recherche>
     <div className="muted" style={{fontSize:12.5,marginBottom:8}}>{liste.length} client(s) sur {rep.length} · d'après les Tags de tes PO depuis le 1er juin 2026</div>
     {liste.slice(0,nb).map(x=><div key={x.cle} className="card" style={{marginBottom:6,padding:'10px 12px',cursor:'pointer',display:'flex',justifyContent:'space-between',gap:8,flexWrap:'wrap'}} onClick={()=>{ setChoisi(x.cle); window.scrollTo(0,0); }}>
-      <div style={{minWidth:0}}><div style={{fontWeight:700}}>{x.nom}</div><div className="muted" style={{fontSize:12}}>{x.cmds.size} commande(s) · {[...x.cmds].slice(0,3).join(', ')}{x.cmds.size>3?'…':''} · {[...x.fourn].slice(0,3).join(', ')}</div></div>
+      <div style={{minWidth:0}}><div style={{fontWeight:700}}>{x.nom}</div>{ctx && ctx.I && [...x.cmds].map(no=>resumeInfos(ctx.I.par[String(no)])).filter(Boolean).slice(0,2).map((t,k)=><div key={k} style={{fontSize:12,color:'var(--accent)'}}>{t}</div>)}<div className="muted" style={{fontSize:12}}>{x.cmds.size} commande(s) · {[...x.cmds].slice(0,3).join(', ')}{x.cmds.size>3?'…':''} · {[...x.fourn].slice(0,3).join(', ')}</div></div>
       <div style={{display:'flex',gap:6,alignItems:'center'}}>{x.bo>0 && <span className="badge" style={{color:'var(--warning)'}}>{x.bo} en BO</span>}<span className="badge" style={{color:x.ouv?'var(--accent)':'var(--success)'}}>{x.ouv ? x.ouv+' à recevoir' : 'Tout reçu'}</span><span className="muted" style={{fontSize:12}}>{fmtJour(x.dernier)}</span></div>
     </div>)}
     {liste.length>nb && <button className="btn" onClick={()=>setNb(n=>n+60)}>Afficher plus</button>}
@@ -1114,6 +1197,7 @@ function App(){
   const isDesktop = useIsDesktop();
   useTheme();
   const N = useNotes(cfg, refreshKey, etat==='ok');
+  const I = useInfos(cfg, refreshKey, etat==='ok');
 
   useEffect(()=>{
     if(!cfg.clientId){ setEtat('config'); return; }
@@ -1168,7 +1252,7 @@ function App(){
   else if(A_VENIR[nav]) ecran = <AVenir id={nav}/>;
   else ecran = <TableauDeBord cfg={cfg} email={email} toast={toast} refreshKey={refreshKey} onNavigate={aller}/>;
 
-  return <NotesCtx.Provider value={{N, cfg, toast}}><div>
+  return <NotesCtx.Provider value={{N, I, cfg, toast}}><div>
     <div className="topbar">
       <div style={{display:'flex',alignItems:'center',gap:10,minWidth:0}}>{!isDesktop && <button className="btn btn-sm" onClick={()=>setMenu(true)} aria-label="Menu" style={{fontSize:18,padding:'4px 11px'}}>☰</button>}<Logo/></div>
       <div style={{display:'flex',alignItems:'center',gap:10}}>
