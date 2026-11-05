@@ -84,7 +84,9 @@ const {useState,useEffect,useCallback,useContext} = React;
 //   apiKey              : facultatif
 //   memoireSpreadsheetId: Google Sheet « La mémoire — Éclairage » (onglets créés par le CRM au besoin)
 //   gmailLibelles       : libellés Gmail à afficher dans Courriel, séparés par des virgules
-const APP_VERSION = 'v10';
+const APP_VERSION = 'v11';
+// v11 : liste des clients d'Orion (onglet « Clients Orion ») importée à la main dans Réglages ; téléphone, adresse et courriel
+//       affichés dans les fiches et commandes ; recherche par nom, téléphone ou adresse, même pour les clients sans commande récente.
 // v10 : recherche élargie (description, notes, contracteur, client final, adresse de livraison), « Infos de la commande » par commande client,
 //       et Tag lu dans la description quand il n'est pas sur sa propre ligne (ex. « TAG: GESTION ADG - PAQUET SAILLANT 119722 »).
 // v9 : fiches fournisseurs modifiables (minimums, délais, téléphones…), contacts par fournisseur (onglet « Contacts fournisseurs ») et notes par fournisseur.
@@ -840,6 +842,7 @@ function CmdClientsView({cfg, email, toast, refreshKey, onClient}){
       </div>
       {ouvert===c.no && <div style={{marginTop:8}}>
         <button className="btn btn-sm" style={{marginBottom:4}} onClick={()=>onClient(cleClient(c.client))}>👤 Fiche de {nomClient(c.client)}</button>
+        <CoordonneesOrion cfg={cfg} nom={c.client} compact/>
         <InfosCommande no={c.no} client={c.client}/>
         {c.lignes.map(l=><LigneSuivi key={l._row} l={l} M={M} email={email} toast={toast} montrerPO/>)}
         <NotesFil filtre={noteDeCommande(c.no, c.lignes)} cible={{'Commande client':c.no, Client:c.client}} titre={'NOTES SUR LA COMMANDE '+c.no} contexte/></div>}
@@ -975,7 +978,143 @@ function grouperRepertoire(lignes){
     c.lignes.push(l); c.cmds.add(l['Commande client']); c.pos.add(l.PO); if(l._fourn) c.fourn.add(l._fourn); if(l._date > c.dernier) c.dernier = l._date; });
   return Object.values(g).map(c=>({...c, ouv:c.lignes.filter(l=>!FERME(l._statut)).length, bo:c.lignes.filter(l=>l._statut==='BO').length}));
 }
-function FicheClient({c, M, email, toast, onRetour}){
+// ── Clients d'Orion (onglet « Clients Orion ») ── v11
+// Bianca exporte « Liste des C/F » d'Orion (fichier texte séparé par des tabulations) et l'importe dans Réglages.
+// La liste est grosse (≈ 29 000 fiches) : lue seulement quand un écran en a besoin, et gardée 30 minutes.
+// Le solde des comptes n'est pas importé.
+const ORION_ENTETE = ['No client','Nom','A/S','Rue','Ville','Prov','Code postal','Téléphone','Fax','Courriel','Vendeur','Créé le','Dernière activité','Importé le'];
+const ORION_COLS = {NUM:'No client', NOM:'Nom', A_S:'A/S', RUE:'Rue', VIL:'Ville', PROV:'Prov', CP:'Code postal', TEL:'Téléphone', TELFAX:'Fax', ETAT_EMAIL:'Courriel', VENDEUR:'Vendeur', CREER_LE:'Créé le', DERNIERE:'Dernière activité'};
+let ORION_CACHE = null;   // {id, t, liste, parCle, parTel}
+const telChiffres = t => String(t||'').replace(/\D/g,'').slice(-10);
+function indexerOrion(liste){
+  const parCle = {}, parTel = {};
+  liste.forEach(c=>{ const k = cleClient(c.Nom); if(k) (parCle[k] = parCle[k] || []).push(c);
+    const t = telChiffres(c['Téléphone']); if(t.length===10) (parTel[t] = parTel[t] || []).push(c); });
+  return {parCle, parTel};
+}
+function useClientsOrion(cfg){
+  const id = cfg.memoireSpreadsheetId;
+  const frais = ORION_CACHE && ORION_CACHE.id===id && Date.now()-ORION_CACHE.t < 30*60000;
+  const [s,setS]=useState(frais ? {lu:true, ...ORION_CACHE} : {lu:false, liste:[], parCle:{}, parTel:{}});
+  useEffect(()=>{
+    if(!id || (ORION_CACHE && ORION_CACHE.id===id && Date.now()-ORION_CACHE.t < 30*60000)) return;
+    let fini = false;
+    (async()=>{ try{
+      const r = await window.gapi.client.sheets.spreadsheets.values.get({spreadsheetId:id, range:"'Clients Orion'!A2:N"});
+      const liste = rowsToObjects(r.result.values||[], ORION_ENTETE).filter(c=>c['No client'] && c.Nom);
+      ORION_CACHE = {id, t:Date.now(), liste, ...indexerOrion(liste)};
+      if(!fini) setS({lu:true, ...ORION_CACHE});
+    }catch(e){ if(!fini) setS(x=>({...x, lu:true, err: ongletAbsent(e) ? '' : apiErrMsg(e)})); } })();
+    const f = ()=>{ ORION_CACHE = null; };
+    window.addEventListener('ems-orion', f);
+    return ()=>{ fini = true; window.removeEventListener('ems-orion', f); };
+  },[id]);
+  return s;
+}
+// Les fiches Orion d'un client du CRM (nom du Tag) : même nom, sinon un nom qui commence pareil.
+function fichesOrion(O, nom){
+  if(!O || !O.lu || !nom) return [];
+  const k = cleClient(nom); if(!k) return [];
+  if(O.parCle[k]) return O.parCle[k];
+  if(k.length < 6) return [];
+  return O.liste.filter(c=>{ const kc = cleClient(c.Nom); return kc && (kc.startsWith(k) || (k.startsWith(kc) && kc.length>=8)); }).slice(0,6);
+}
+const recentD = c => String(c['Dernière activité']||'').slice(0,10) <= todayISO() ? String(c['Dernière activité']||'') : '';
+function FicheOrion({c, compact}){
+  const tel = c['Téléphone'], courriel = c.Courriel;
+  const adr = [c.Rue, c.Ville, c.Prov, c['Code postal']].filter(Boolean).join(', ');
+  return <div style={{padding:compact?'2px 0':'6px 0',borderBottom:compact?'none':'1px solid var(--border)',fontSize:13}}>
+    {!compact && <div><b>{c.Nom}</b>{c['A/S'] && <span className="muted"> · a/s {c['A/S']}</span>} <span className="muted" style={{fontSize:11.5}}>· no {c['No client']}</span></div>}
+    <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+      {tel && <a href={'tel:'+telChiffres(tel)} style={{color:'var(--accent)',fontWeight:600}}>📞 {tel}</a>}
+      {courriel && <a href={'mailto:'+courriel} style={{color:'var(--accent)'}}>✉ {courriel}</a>}
+      {adr && <span>📍 {adr}</span>}
+    </div>
+    {!compact && <div className="muted" style={{fontSize:11.5}}>{[c.Vendeur && 'vendeur '+c.Vendeur, recentD(c) && 'dernière activité '+fmtJour(recentD(c)), c['Créé le'] && 'client depuis '+String(c['Créé le']).slice(0,4)].filter(Boolean).join(' · ')}</div>}
+  </div>;
+}
+function CoordonneesOrion({cfg, nom, compact}){
+  const O = useClientsOrion(cfg);
+  if(!cfg.memoireSpreadsheetId || !O.lu) return null;
+  if(!O.liste.length) return compact ? null : <div className="card muted" style={{fontSize:12.5,marginBottom:12}}>Téléphone et adresse : importe la liste des clients d'Orion dans Réglages.</div>;
+  const fs = fichesOrion(O, nom).slice().sort((a,b)=>recentD(b).localeCompare(recentD(a)));
+  if(compact) return fs.length ? <FicheOrion c={fs[0]} compact/> : null;
+  return <div className="card" style={{marginBottom:12,padding:'8px 12px'}}>
+    <div className="muted" style={{fontSize:11.5,fontWeight:700}}>DANS ORION{fs.length>1 ? ' ('+fs.length+' fiches)' : ''}</div>
+    {fs.length ? fs.slice(0,5).map(c=><FicheOrion key={c['No client']} c={c}/>) : <div className="muted" style={{fontSize:12.5}}>Aucune fiche Orion avec ce nom exact.</div>}
+  </div>;
+}
+// Résultats de recherche dans toute la liste Orion (nom, téléphone, adresse, ville, courriel, no de client).
+function RechercheOrion({cfg, q}){
+  const O = useClientsOrion(cfg);
+  const t = String(q||'').trim();
+  if(t.length < 3 || !O.lu || !O.liste.length) return null;
+  const chiffres = t.replace(/\D/g,'');
+  const qn = sansAccent(t).toLowerCase();
+  const res = O.liste.filter(c=> (chiffres.length>=7 && telChiffres(c['Téléphone']).includes(chiffres)) || String(c['No client'])===t ||
+    sansAccent([c.Nom,c['A/S'],c.Rue,c.Ville,c['Code postal'],c.Courriel].join(' ')).toLowerCase().includes(qn))
+    .sort((a,b)=>recentD(b).localeCompare(recentD(a)));
+  if(!res.length) return null;
+  return <div className="card" style={{marginTop:10,padding:'8px 12px'}}>
+    <div className="muted" style={{fontSize:11.5,fontWeight:700}}>DANS LA LISTE DES CLIENTS D'ORION · {res.length} fiche(s){res.length>25?' (25 plus récentes)':''}</div>
+    {res.slice(0,25).map(c=><FicheOrion key={c['No client']} c={c}/>)}
+  </div>;
+}
+// Réglages : importer « Liste des C/F » exportée d'Orion.
+function lireExportOrion(buf){
+  let txt = new TextDecoder('utf-8').decode(buf);
+  if(txt.includes('�')) txt = new TextDecoder('windows-1252').decode(buf);
+  const lignes = txt.split(/\r?\n/).filter(l=>l.trim());
+  const ent = (lignes[0]||'').split('\t').map(s=>s.trim().toUpperCase());
+  if(!ent.includes('NUM') || !ent.includes('NOM')) throw new Error('Ce fichier ne ressemble pas à « Liste des C/F » d\'Orion (colonnes NUM et NOM introuvables).');
+  const pos = {}; Object.keys(ORION_COLS).forEach(k=>{ pos[k] = ent.indexOf(k); });
+  const auj = dateHeure();
+  const vus = new Set();
+  const rows = [];
+  lignes.slice(1).forEach(l=>{ const c = l.split('\t'); const v = k => pos[k]>=0 ? String(c[pos[k]]||'').trim() : '';
+    const no = v('NUM'); if(!no || vus.has(no) || !v('NOM')) return; vus.add(no);
+    rows.push([...Object.keys(ORION_COLS).map(v), auj]); });
+  return rows;
+}
+function ImportOrion({cfg, toast}){
+  const [etat,setEtat]=useState(''), [busy,setBusy]=useState(false);
+  const id = cfg.memoireSpreadsheetId;
+  if(!id) return null;
+  const go = async f=>{
+    if(!f) return; setBusy(true);
+    try{
+      setEtat('Lecture du fichier…');
+      const rows = lireExportOrion(await f.arrayBuffer());
+      if(!rows.length) throw new Error('Aucun client trouvé dans le fichier.');
+      if(!window.confirm('Remplacer la liste des clients d\'Orion dans le Sheet par ces '+rows.length.toLocaleString('fr-CA')+' fiches ?')){ setBusy(false); setEtat(''); return; }
+      await ensureSheetsExist(id, [{name:'Clients Orion', headers:ORION_ENTETE}]);
+      const meta = await window.gapi.client.sheets.spreadsheets.get({spreadsheetId:id, fields:'sheets.properties(sheetId,title)'});
+      const sh = (meta.result.sheets||[]).find(s=>s.properties.title==='Clients Orion');
+      setEtat('Préparation de l\'onglet…');
+      await ecrire(()=>window.gapi.client.sheets.spreadsheets.batchUpdate({spreadsheetId:id, resource:{requests:[
+        {updateSheetProperties:{properties:{sheetId:sh.properties.sheetId, gridProperties:{rowCount:rows.length+1, columnCount:ORION_ENTETE.length, frozenRowCount:1}}, fields:'gridProperties(rowCount,columnCount,frozenRowCount)'}}]}}));
+      await ecrire(()=>window.gapi.client.sheets.spreadsheets.values.clear({spreadsheetId:id, range:"'Clients Orion'!A2:N"}));
+      await ecrire(()=>window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:"'Clients Orion'!A1", valueInputOption:'RAW', resource:{values:[ORION_ENTETE]}}));
+      const PAS = 4000;
+      for(let i=0;i<rows.length;i+=PAS){
+        setEtat('Envoi… '+Math.min(i+PAS,rows.length).toLocaleString('fr-CA')+' / '+rows.length.toLocaleString('fr-CA'));
+        const bout = rows.slice(i,i+PAS);
+        await ecrire(()=>window.gapi.client.sheets.spreadsheets.values.update({spreadsheetId:id, range:"'Clients Orion'!A"+(i+2)+':N'+(i+1+bout.length), valueInputOption:'RAW', resource:{values:bout}}));
+      }
+      ORION_CACHE = null; window.dispatchEvent(new Event('ems-orion'));
+      setEtat('✓ '+rows.length.toLocaleString('fr-CA')+' clients importés le '+fmtNoteDate(dateHeure())+'.');
+      toast('Liste des clients d\'Orion importée.');
+    }catch(e){ setEtat(''); toast(e.message || apiErrMsg(e),'err'); }
+    setBusy(false);
+  };
+  return <div className="card" style={{marginTop:12,fontSize:13}}>
+    <div className="fh" style={{fontSize:15}}>Clients d'Orion</div>
+    <div className="muted" style={{fontSize:12.5,margin:'4px 0 8px'}}>Dans Orion : exporte « Liste des C/F », puis choisis le fichier ici. La liste remplace la précédente (le solde des comptes n'est pas importé). Le CRM affiche ensuite le téléphone, l'adresse et le courriel des clients.</div>
+    <input type="file" accept=".xls,.txt,.csv,.tsv,text/plain" disabled={busy} onChange={e=>{ go(e.target.files[0]); e.target.value=''; }}/>
+    {etat && <div style={{marginTop:6}}>{etat}</div>}
+  </div>;
+}
+function FicheClient({c, M, email, toast, onRetour, cfg}){
   const [tout,setTout]=useState(false);
   const parCmd = {}; c.lignes.forEach(l=>{ (parCmd[l['Commande client']] = parCmd[l['Commande client']] || []).push(l); });
   const cmds = Object.keys(parCmd).map(no=>({no, ls:parCmd[no], date:parCmd[no].reduce((m,l)=>l._date>m?l._date:m,''), ouv:parCmd[no].filter(l=>!FERME(l._statut)).length}))
@@ -990,7 +1129,7 @@ function FicheClient({c, M, email, toast, onRetour}){
       <div className="card" style={{padding:12}}><div style={{fontSize:22,fontWeight:800,color:c.bo?'var(--warning)':'inherit'}}>{c.bo}</div><div style={{fontSize:12.5}}>en BO</div></div>
       <div className="card" style={{padding:12}}><div style={{fontSize:13,fontWeight:600}}>Fournisseurs</div><div className="muted" style={{fontSize:12}}>{[...c.fourn].join(', ')}</div></div>
     </div>
-    <div className="card muted" style={{fontSize:12.5,marginBottom:12}}>Courriel, téléphone et adresse : à venir (lus dans tes factures et soumissions envoyées au client).</div>
+    <CoordonneesOrion cfg={cfg} nom={c.nom}/>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',margin:'4px 0 8px'}}>
       <div className="fh" style={{fontSize:16}}>{tout ? 'Toutes les commandes' : 'Commandes ouvertes'}</div>
       <button className="btn btn-sm" onClick={()=>setTout(t=>!t)}>{tout ? 'Seulement les ouvertes' : 'Voir aussi les commandes reçues'}</button>
@@ -1013,13 +1152,13 @@ function ClientsView({cfg, email, toast, refreshKey, choisi, setChoisi}){
   const p0 = PasConfigure({M}); if(p0) return <div><h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Clients</h2>{p0}</div>;
   const rep = grouperRepertoire(M.lignes);
   const c = choisi && rep.find(x=>x.cle===choisi);
-  if(c) return <FicheClient c={c} M={M} email={email} toast={toast} onRetour={()=>setChoisi(null)}/>;
+  if(c) return <FicheClient c={c} M={M} email={email} toast={toast} cfg={cfg} onRetour={()=>setChoisi(null)}/>;
   const liste = rep.filter(x=>filtre==='tous' || (filtre==='ouverts' && x.ouv) || (filtre==='bo' && x.bo))
     .filter(x=>contient([x.nom,[...x.cmds],[...x.pos],x.lignes.map(l=>[l.Produit,l.Description]),[...x.cmds].map(no=>texteCommande(ctx,no))], q))
     .sort((a,b)=> filtre==='tous' ? a.nom.localeCompare(b.nom) : b.dernier.localeCompare(a.dernier));
   return <div>
     <h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Clients</h2>
-    <Recherche q={q} setQ={setQ} ph="Chercher : nom, client final, adresse, no de commande, PO, produit…">
+    <Recherche q={q} setQ={setQ} ph="Chercher : nom, téléphone, adresse, client final, no de commande, PO, produit…">
       <select value={filtre} onChange={e=>setFiltre(e.target.value)} style={{width:'auto'}}>
         <option value="ouverts">Avec des produits à recevoir</option><option value="bo">Avec un produit en BO</option><option value="tous">Tous (A à Z)</option></select>
     </Recherche>
@@ -1029,6 +1168,7 @@ function ClientsView({cfg, email, toast, refreshKey, choisi, setChoisi}){
       <div style={{display:'flex',gap:6,alignItems:'center'}}>{x.bo>0 && <span className="badge" style={{color:'var(--warning)'}}>{x.bo} en BO</span>}<span className="badge" style={{color:x.ouv?'var(--accent)':'var(--success)'}}>{x.ouv ? x.ouv+' à recevoir' : 'Tout reçu'}</span><span className="muted" style={{fontSize:12}}>{fmtJour(x.dernier)}</span></div>
     </div>)}
     {liste.length>nb && <button className="btn" onClick={()=>setNb(n=>n+60)}>Afficher plus</button>}
+    <RechercheOrion cfg={cfg} q={q}/>
   </div>;
 }
 
@@ -1145,7 +1285,7 @@ function CourrielView({cfg, email, toast}){
   return <div><h2 className="fh" style={{margin:'0 0 10px',fontSize:22}}>Courriel</h2><GmailBoite cfg={cfg} email={email} toast={toast}/></div>;
 }
 
-function SettingsView({cfg, onSave, avantConnexion, email, onDeconnexion}){
+function SettingsView({cfg, onSave, avantConnexion, email, onDeconnexion, toast}){
   const [f,setF]=useState(cfg);
   const [theme,setTheme]=useTheme();
   const origine = window.location.origin;
@@ -1175,6 +1315,7 @@ function SettingsView({cfg, onSave, avantConnexion, email, onDeconnexion}){
         <button className="btn btn-sm" onClick={onDeconnexion}>Se déconnecter</button>
       </div>}
     </div>
+    {!avantConnexion && toast && <ImportOrion cfg={cfg} toast={toast}/>}
   </div>;
 }
 
@@ -1242,7 +1383,7 @@ function App(){
   if(nav==='dashboard') ecran = <TableauDeBord cfg={cfg} email={email} toast={toast} refreshKey={refreshKey} onNavigate={aller}/>;
   else if(nav==='courriel') ecran = <CourrielView key={'c'+refreshKey+cfg.gmailLibelles} cfg={cfg} email={email} toast={toast}/>;
   else if(nav==='rappels') ecran = <RappelsView cfg={cfg} toast={toast} refreshKey={refreshKey}/>;
-  else if(nav==='reglages') ecran = <SettingsView cfg={cfg} onSave={sauverReglages} email={email} onDeconnexion={deconnecter}/>;
+  else if(nav==='reglages') ecran = <SettingsView cfg={cfg} onSave={sauverReglages} email={email} onDeconnexion={deconnecter} toast={toast}/>;
   else if(nav==='cmdfourn') ecran = <CmdFournView cfg={cfg} email={email} toast={toast} refreshKey={refreshKey}/>;
   else if(nav==='cmdclients') ecran = <CmdClientsView cfg={cfg} email={email} toast={toast} refreshKey={refreshKey} onClient={k=>{ setClientChoisi(k); aller('clients'); }}/>;
   else if(nav==='clients') ecran = <ClientsView cfg={cfg} email={email} toast={toast} refreshKey={refreshKey} choisi={clientChoisi} setChoisi={setClientChoisi}/>;
